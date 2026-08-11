@@ -1,5 +1,7 @@
 # PVE 單一 IP 多網站網路架構研究
 
+> **Implementation decision (2026-08-11):** 使用者已取消 DNS、hostname routing、ACME 與公開信任 TLS，改採 `10.1.2.57:<port>`。目前 spec 以 nftables 明確 DNAT 為準：Type AI Platform 使用 TCP `8081`，第二驗證服務暫用 TCP `8082`。本文其餘 DNS／Caddy／TLS 內容保留為已捨棄方案的研究紀錄，不是目前實作要求。
+
 研究日期：2026-08-11
 
 ## 結論

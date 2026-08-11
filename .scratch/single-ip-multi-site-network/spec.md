@@ -8,17 +8,17 @@ Status: ready-for-agent
 
 若每個網站或 guest 都要求一個 `10.1.2.x` 位址，現有位址空間無法支撐需求。若另外導入 WireGuard，使用者將需要第二套 VPN、金鑰及路由管理，但它仍不會解決多個 HTTP/HTTPS 網站共用單一入口 IP 的分流問題。
 
-使用者需要的是：只連既有 FortiClient VPN，即可用一般瀏覽器及正式 HTTPS 網址存取所有內部網站；後端 guest 使用獨立私有 IP，且不對 VPN 使用者直接暴露；既有 PVE 管理路徑不受影響。
+使用者需要的是：只連既有 FortiClient VPN，即可用 `10.1.2.57:<port>` 存取所有內部服務；後端 guest 使用獨立私有 IP，且不對 VPN 使用者直接暴露；既有 PVE 管理路徑不受影響。使用者明確選擇取消 DNS 與公開信任 TLS，以部署速度和操作簡單為優先。
 
 ## Solution
 
-保留 FortiClient／FortiGate 作為唯一 VPN 入口，將 `10.1.2.57` 配置給一台專用 Edge VM。Edge VM 同時提供 Caddy 反向代理、nftables 防火牆、IPv4 forwarding 與私有 guest 的 outbound NAT。
+保留 FortiClient／FortiGate 作為唯一 VPN 入口，將 `10.1.2.57` 配置給一台專用 Edge VM。Edge VM 提供 nftables 防火牆、明確的 port DNAT、IPv4 forwarding 與私有 guest 的 outbound NAT，不部署 Caddy 或其他 hostname reverse proxy。
 
 PVE 新增一個不連接實體網卡的私有 Linux bridge。Edge VM 的前端網卡連接既有實體 bridge 並使用 `10.1.2.57`；後端網卡連接私有 bridge 並使用 `172.23.57.1/24`。網站 guest 使用 `172.23.57.0/24` 的位址，以 Edge VM 作 default gateway。
 
-所有內部網站使用組織持有正式網域下的 hostname。FortiClient 的 split DNS 將這些 hostname 解析至 `10.1.2.57`，Caddy 終止 TLS，依 HTTP Host／TLS SNI 將請求轉送到正確的私有 backend。公開信任憑證透過 ACME DNS-01 自動簽發及續期，不將網站開放至 Internet，也不要求使用者安裝私有 CA。
+每個內部服務配置一個獨立且可稽核的入口 TCP port。初始配置保留 `8081` 給 Type AI Platform、`8082` 給第二個驗證服務；nftables 將每個入口 port DNAT 到指定的私有 backend IP 與 service port。未配置的 port 維持拒絕。
 
-VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 的 80/443 存取明確登記的網站。PVE 管理介面繼續使用 `10.1.2.50:8006`，不經過 Caddy。
+VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 明確放行的 `10.1.2.57:<port>` 存取服務。初版使用 VPN 內 HTTP，不簽發公開憑證；這表示 FortiGate 解密後至 Edge／backend 的內部路徑沒有應用層 TLS。PVE 管理介面繼續使用 `10.1.2.50:8006`，不經過 Edge 服務入口。
 
 第一個實際 backend 是 Type AI Platform。它使用 node `pve` 上既有 VM 109（`ub-26-4-srv-docker`）建立 full clone，來源 VM 保持不變。新 VM 接入私有 bridge，專案原始碼、Docker data-root 與應用持久資料均放在 `/srv` 下可用空間最大的適用 filesystem。專案來源為使用者指定的 Type AI Platform Git repository。
 
@@ -27,18 +27,18 @@ VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 的 80/443 存
 ## User Stories
 
 1. As a VPN user, I want to use the existing FortiClient connection, so that I do not need to install or operate a second VPN client.
-2. As a VPN user, I want each internal website to have a memorable hostname, so that I do not need to remember IP addresses and ports.
-3. As a VPN user, I want internal hostnames to resolve automatically after connecting to the VPN, so that I do not need to edit my local `hosts` file.
-4. As a VPN user, I want browsers to trust each internal website's HTTPS certificate, so that I do not receive certificate warnings.
-5. As a VPN user, I want different website hostnames to reach the correct applications even though they share `10.1.2.57`, so that all required sites remain independently usable.
-6. As a VPN user, I want HTTP requests to redirect to HTTPS, so that credentials and application traffic are not sent in plaintext.
-7. As a VPN user, I want common reverse-proxied features such as WebSocket connections to continue working, so that interactive applications behave normally.
-8. As a VPN user, I want unknown hostnames to be rejected, so that I am never sent to an unrelated default application.
+2. As a VPN user, I want each internal service to have a documented `10.1.2.57:<port>` endpoint, so that I can connect without DNS or local host mappings.
+3. As a VPN user, I want different entrance ports to reach the correct applications on the shared IP, so that all required services remain independently usable.
+4. As a VPN user, I want unassigned entrance ports to be rejected, so that I am never sent to an unrelated application.
+5. As a VPN user, I want protocols such as HTTP and WebSocket to pass transparently through the configured port mapping, so that interactive applications behave normally.
+6. As a VPN user, I accept that the initial IP-and-port deployment uses HTTP inside the approved VPN and does not provide publicly trusted TLS.
+7. As a VPN user, I want the port map kept explicit and stable, so that bookmarks and operational documentation remain accurate.
+8. As a VPN user, I want service endpoints documented without embedding credentials, so that connection instructions can be shared safely.
 9. As a VPN user, I want internal websites to be unreachable when I am not connected to the approved VPN, so that they remain internal services.
 10. As a service owner, I want each VM or LXC to have its own private IP, so that services can be isolated and addressed consistently.
 11. As a service owner, I want different guests to reuse the same local service ports, so that applications do not require arbitrary port remapping.
-12. As a service owner, I want to add a website by declaring its hostname and backend, so that onboarding does not consume another `10.1.2.x` address.
-13. As a service owner, I want the original client protocol and address metadata to be forwarded safely, so that applications can generate correct URLs and audit requests.
+12. As a service owner, I want to add a service by declaring its entrance port and backend, so that onboarding does not consume another `10.1.2.x` address.
+13. As a service owner, I want DNAT to preserve the original transport without injecting proxy headers, so that application behavior is not coupled to a reverse proxy.
 14. As a service owner, I want backend access limited to the Edge VM and explicitly approved peers, so that a compromised VPN account cannot directly probe applications.
 15. As a guest administrator, I want private guests to download operating-system and application updates, so that they can remain patched without receiving routable corporate IPs.
 16. As a guest administrator, I want guest outbound access governed by firewall policy, so that private guests cannot freely access management systems.
@@ -48,21 +48,21 @@ VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 的 80/443 存
 20. As a PVE administrator, I want network changes applied only when out-of-band recovery is available, so that a configuration error cannot permanently remove remote management access.
 21. As a network administrator, I want `10.1.2.57` formally reserved and excluded from DHCP, so that the Edge VM never encounters an address conflict.
 22. As a network administrator, I want the switch and NAC policy to explicitly permit the Edge VM MAC address, so that bridged guest networking works without bypassing port security.
-23. As a network administrator, I want FortiGate to permit only the required VPN groups and source pools to reach `10.1.2.57:80/443`, so that the website entrance follows existing access policy.
-24. As a network administrator, I want the application DNS suffix sent through VPN split DNS, so that internal queries use the approved DNS servers while unrelated DNS behavior remains unchanged.
-25. As a DNS administrator, I want internal website records to point to `10.1.2.57`, so that no private backend addresses need to be published to clients.
-26. As a DNS administrator, I want public DNS to expose only the records required for ACME validation, so that internal address records are not unnecessarily published.
+23. As a network administrator, I want the currently approved FortiClient path empirically verified against every assigned port on `10.1.2.57`, so that deployment stops if the existing FortiGate path does not carry the required traffic.
+24. As a network administrator, I want the initial allowed-port set limited to `8081` and the temporary validation port `8082`, so that the deployment does not create a broad port range.
+25. As an operator, I want every allocated entrance port recorded with its backend IP and service port, so that changes remain auditable.
+26. As an operator, I want port collisions detected before firewall rules are applied, so that one service cannot silently replace another.
 27. As a security administrator, I want all Edge VM input and forwarding chains to default to deny, so that only explicitly allowed flows are possible.
-28. As a security administrator, I want DNS API credentials scoped to the minimum required records, so that compromise of the Edge VM cannot modify unrelated DNS data.
-29. As a security administrator, I want backend applications to trust proxy headers only from the Edge VM, so that clients cannot spoof identity or source information.
-30. As a security administrator, I want upstream TLS verification enabled whenever TLS is used to a backend, so that backend encryption is not weakened by disabling certificate validation.
-31. As an operator, I want Caddy and firewall configuration validated before reload, so that an invalid change does not interrupt every website.
+28. As a security administrator, I want no DNS API token, ACME account key or Edge TLS private key deployed for this design, so that unused secrets do not enlarge the attack surface.
+29. As a security administrator, I want backend applications not to trust client-supplied proxy headers because the Edge does not generate trusted proxy metadata.
+30. As a security administrator, I want any future TLS addition treated as a separately approved hardening change, so that certificate validation is not silently disabled.
+31. As an operator, I want nftables configuration validated before reload, so that an invalid change does not interrupt every service.
 32. As an operator, I want Edge VM services and networking to start automatically after reboot, so that a host restart does not require manual recovery.
-33. As an operator, I want health checks for DNS, HTTPS, backend routing and certificate expiry, so that failures are detected before users report them.
+33. As an operator, I want health checks for each allocated `IP:port`, backend routing and application response, so that failures are detected before users report them.
 34. As an operator, I want Edge VM configuration and secrets backed up through approved secure mechanisms, so that the entrance can be restored after failure.
 35. As an operator, I want a documented restore and reboot verification procedure, so that recoverability is demonstrated rather than assumed.
 36. As a maintainer, I want the architecture to use the minimum necessary components, so that routine changes do not require expertise in overlapping VPN and proxy systems.
-37. As a maintainer, I want site routing to remain explicit, so that each hostname has an auditable backend destination.
+37. As a maintainer, I want service routing to remain explicit, so that each entrance port has an auditable backend destination.
 38. As a maintainer, I want deployment to stop if the proposed private CIDR overlaps an existing network, so that routing ambiguity is not introduced silently.
 39. As an auditor, I want access and error logs from the Edge VM, so that website traffic and routing failures can be investigated.
 40. As an auditor, I want PVE management access separated from website access, so that publishing a site never grants hypervisor privileges.
@@ -79,7 +79,7 @@ VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 的 80/443 存
 ## Implementation Decisions
 
 - The existing FortiClient／FortiGate tunnel remains the sole client VPN. WireGuard will not be installed for this feature.
-- `10.1.2.50:8006` remains the PVE management endpoint and is not proxied, renamed or exposed through the website DNS suffix.
+- `10.1.2.50:8006` remains the PVE management endpoint and is not forwarded, renamed or exposed through the service port map.
 - `10.1.2.57` is the only `10.1.2.x` address allocated to the website platform and belongs to a dedicated Edge VM.
 - The Edge VM is a regular VM rather than an LXC because it forms the network and firewall boundary and must control forwarding and NAT without container capability exceptions.
 - The Type AI Platform backend and the Edge VM are separate machines. Application containers never share the network-boundary VM.
@@ -91,61 +91,57 @@ VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 的 80/443 存
 - The project checkout, Docker data-root, bind-mounted application state and named-volume backing data for this dedicated clone are all located below the selected `/srv` filesystem. Existing unrelated data is not moved or deleted.
 - Before creating or changing a deployment `.env`, implementation reads the corresponding backend environment source in the ignored `.secrets` hierarchy and compares it with the application's required environment schema or example.
 - Secret values are never printed, copied into ticket text, committed, or included in test artifacts. When a required key is absent, only its key name is reported and work pauses under `[HUMAN ACTION]`; values are never invented.
-- Any step that needs the user's credentials, infrastructure approval, FortiGate or DNS administration, PVE console access, destructive confirmation or missing secret is marked `[HUMAN ACTION]`. The agent must stop at that gate until the user explicitly confirms completion.
+- Any step that needs the user's credentials, infrastructure approval, FortiGate administration, PVE console access, destructive confirmation or missing secret is marked `[HUMAN ACTION]`. The agent must stop at that gate until the user explicitly confirms completion.
 - The Edge VM uses two NICs: a front NIC on the existing PVE physical bridge and a back NIC on a new private bridge.
 - The private bridge has no physical bridge ports. The PVE host has no IP address on it.
 - The default private address plan is `172.23.57.0/24`, with `172.23.57.1` reserved for the Edge VM. Backend addresses begin at `172.23.57.11`; lower addresses remain reserved for infrastructure.
 - Before any network mutation, implementation must check that `172.23.57.0/24` does not overlap corporate routes, VPN client networks, container networks or site-to-site networks. An overlap is a blocking condition requiring the spec's address plan to be amended; the implementation must not silently choose another subnet.
 - The Edge VM front prefix, default gateway and DNS resolver are read from the existing approved `10.1.2.0/24` network configuration. They are environment inputs, not invented defaults.
 - The network administrator must confirm that `10.1.2.57` is reserved outside DHCP and that the switch or NAC permits the Edge VM's MAC address. Failure of either check blocks deployment.
-- Caddy is the sole HTTP/HTTPS entrance and TLS terminator. Nginx, HAProxy, Traefik and a GUI proxy manager are not added.
-- Each published website has an explicit Caddy hostname-to-backend mapping. There is no automatic discovery layer or separate routing manifest.
-- Website ingress is reverse proxy traffic, not DNAT. Caddy connects to each backend from its private interface.
-- Caddy must reject an unrecognised hostname instead of selecting a default backend.
-- Caddy forwards standard proxy metadata. Backends that consume it trust it only from the Edge VM private address.
-- Edge-to-backend HTTP is permitted on the isolated subnet where the service threat model allows it. Services requiring encrypted backend transport use a verifiable certificate and trust pool; TLS verification may not be disabled.
+- Caddy, Nginx, HAProxy, Traefik and GUI proxy managers are not part of the initial entrance. nftables performs explicit destination NAT from each front-side TCP port to one private backend endpoint.
+- The initial port allocation is `10.1.2.57:8081` for Type AI Platform and `10.1.2.57:8082` for the temporary second-service acceptance test. Additional services require an explicit, non-conflicting port assignment and firewall review.
+- Each published service has one auditable `front_port -> backend_ip:backend_port` mapping. There is no automatic discovery or catch-all destination.
+- Unassigned front ports are rejected by the default-deny policy. A request cannot fall through to another backend.
+- DNAT preserves the original application protocol and does not add trusted proxy headers. Backends must not trust client-supplied `Forwarded` or `X-Forwarded-*` headers as Edge identity evidence.
+- The initial user-facing transport is HTTP inside the approved FortiClient VPN. No public certificate, internal CA or self-signed certificate is deployed. Adding TLS later requires a separate design and acceptance change.
 - nftables is the firewall and NAT implementation on the Edge VM. No second firewall appliance is introduced in the initial architecture.
-- Edge VM input and forward policy default to deny. Input permits loopback, required ICMP, established or related traffic, approved administrative SSH, and approved VPN sources to TCP 80/443.
-- Front-to-private forwarding is denied. Website traffic terminates at Caddy rather than being generally forwarded into the guest subnet.
+- Edge VM input and forward policy default to deny. Input permits loopback, required ICMP, established or related traffic and approved administrative SSH. Forward permits approved VPN sources only to explicitly allocated DNAT ports.
+- Front-to-private forwarding is denied except for the exact DNAT tuples declared in the port map.
 - Private guests may initiate only approved outbound traffic with established or related return traffic. Source NAT masquerades approved guest traffic as `10.1.2.57`.
-- Each backend's PVE or guest firewall permits its web port from the Edge VM private address and denies unneeded inbound and east-west traffic.
-- FortiGate policy permits only approved VPN groups and source pools to reach `10.1.2.57` on TCP 80/443. This feature does not broaden ordinary user access to `10.1.2.50:8006`.
+- Each backend's PVE or guest firewall permits its service port from approved VPN source addresses through the Edge forwarding path and denies unneeded inbound and east-west traffic.
+- FortiGate administrative details are unavailable. The user has accepted an empirical gate: temporary listeners on `10.1.2.57` must produce `TcpTestSucceeded=True` for TCP `8081` and `8082` from the currently approved FortiClient session before deployment. A failure blocks deployment and must not be bypassed.
+- Passing the empirical gate proves point-in-time reachability only. It does not reveal or prove least-privilege policy scope, complete client pools, user groups, destination objects or NAT behavior, and it does not guarantee future FortiGate changes will preserve access.
 - VPN clients receive no route for `172.23.57.0/24`. Direct backend access is intentionally unavailable.
-- Internal DNS uses a subdomain of an organisation-owned registered domain. Site records, or a controlled wildcard record, resolve to `10.1.2.57` only through the internal DNS view.
-- FortiClient split DNS sends queries for the chosen application suffix to the internal DNS servers. Users do not maintain local host mappings.
-- Public DNS does not need an A or AAAA record for the private website entrance. It provides only the DNS-01 validation records required by the certificate authority.
-- Publicly trusted HTTPS certificates are issued and renewed through ACME DNS-01. DNS credentials are narrowly scoped; delegation of the ACME challenge zone is preferred when supported.
-- Caddy's internal CA and direct HTTPS access by `10.1.2.57` are not used as production entry points.
-- Certificate issuance is tested against the certificate authority's staging environment before production issuance.
-- DNS API tokens, ACME account keys and TLS private keys are secrets. They are never committed to the repository and are handled through the selected secure deployment mechanism.
-- Edge VM networking, nftables and Caddy must be enabled for automatic startup. Configuration reloads occur only after syntax validation.
+- DNS, split DNS, ACME and certificate automation are intentionally omitted. Users connect directly to documented `10.1.2.57:<port>` endpoints.
+- DNS API tokens, ACME account keys and Edge TLS private keys must not be introduced for this design.
+- Edge VM networking and nftables must be enabled for automatic startup. Rule reloads occur only after validation.
 - Backups include all configuration needed to reconstruct the Edge VM and protected copies of required secrets. Restore and reboot behavior must be tested.
-- The combined router and proxy role is an accepted single point of failure for the initial one-PVE, one-IP deployment. Splitting these roles is deferred until scale or threat requirements justify the extra boundary.
+- The Edge router and port-forwarding role is an accepted single point of failure for the initial one-PVE, one-IP deployment. Splitting these roles is deferred until scale or threat requirements justify the extra boundary.
 
 ## Testing Decisions
 
-- The primary test seam is one black-box client boundary representing a user already connected to FortiClient. Tests assert observable DNS, TLS, HTTP routing and isolation behavior without inspecting Caddy or nftables internals.
-- A valid application hostname must resolve through VPN split DNS to `10.1.2.57`.
-- At least two distinct hostnames sharing `10.1.2.57` must return distinguishable responses from their intended private backends.
-- HTTP must redirect to HTTPS, and HTTPS must present a publicly trusted, hostname-matching certificate.
-- A hostname absent from the site configuration must not reach any backend.
+- The primary test seam is one black-box client boundary representing a user already connected to FortiClient. Tests assert observable `IP:port` routing and isolation behavior without inspecting nftables internals.
+- `10.1.2.57:8081` must return the Type AI Platform response through the approved VPN path.
+- `10.1.2.57:8082` must return a distinguishable response from the temporary second backend during multi-service acceptance.
+- Before permanent publication, the same approved FortiClient client must repeat `Test-NetConnection` against each allocated port. Both temporary preflight probes and final service probes must be recorded with source address, destination and result.
+- An unassigned entrance port must fail closed and must not reach any backend.
+- No DNS lookup, hostname, certificate or HTTPS redirect is required by this design.
 - A VPN client must have no route to the private subnet and must fail to connect directly to backend addresses.
 - A VPN user in the ordinary website access group must not gain access to the PVE management endpoint.
 - A backend guest must reach approved update destinations through the Edge VM's NAT path.
 - A backend guest must not initiate access to the PVE management endpoint or unapproved east-west destinations.
 - A backend web port must accept the Edge VM private source and reject unapproved sources.
-- Proxy metadata behavior must be tested at the application boundary, including protection against a client-supplied spoofed forwarding header.
-- If an HTTPS backend is used, the test must fail when its certificate is untrusted or mismatched; disabling verification is not an acceptable fix.
-- Caddy and nftables configuration validation commands are secondary preflight checks, not substitutes for black-box behavior tests.
-- The Edge VM and PVE host must be rebooted during acceptance testing. DNS resolution, firewall policy, NAT and every published hostname must recover automatically.
+- The application must not treat client-supplied proxy headers as authenticated Edge metadata because the DNAT path does not inject trusted headers.
+- nftables configuration validation commands are secondary preflight checks, not substitutes for black-box behavior tests.
+- The Edge VM and PVE host must be rebooted during acceptance testing. Firewall policy, NAT and every allocated entrance port must recover automatically.
 - A restore exercise must rebuild or recover the Edge entrance from its documented backup and reproduce the same black-box results.
-- Tests must also be executed without the approved VPN path. Internal application hostnames and `10.1.2.57` website services must not become publicly reachable.
+- Tests must also be executed without the approved VPN path. Allocated `10.1.2.57` service ports must not become publicly reachable.
 - Existing tests provide no prior art because the repository currently contains documentation only. The first implementation should establish the black-box acceptance harness as the single reusable seam for later site additions.
 - VM 109's configuration, disks, power state and network identity must match their pre-clone observations after the backend clone is created.
 - The cloned backend must report 8 available virtual CPU cores and 64 GiB configured memory, while VM 109 retains its original CPU and memory configuration.
 - The backend must report the expected source repository and record the deployed revision without exposing repository credentials.
 - Storage acceptance verifies that the checkout, Docker data-root and persistent application data resolve below the selected `/srv` filesystem and that at least twenty percent free space remains after deployment.
-- The application must first pass a private-backend health check before DNS or Caddy publishes it to VPN users.
+- The application must first pass a private-backend health check before its DNAT port is enabled for VPN users.
 - Secret-safety acceptance verifies that environment files and secret values are absent from Git changes and captured logs. Tests may report key names, presence and validation status, but never values.
 - Any acceptance step requiring user action must remain pending while its `[HUMAN ACTION]` gate is unconfirmed; it may not be marked successful based on an assumption.
 
@@ -153,14 +149,14 @@ VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 的 80/443 存
 
 - Installing or operating WireGuard or another second client VPN.
 - Giving VPN clients direct routed access to `172.23.57.0/24`.
-- Publishing SSH, RDP, databases or arbitrary non-HTTP protocols through hostname-based HTTP routing.
+- Publishing SSH, RDP, databases or other sensitive protocols without a separately approved port assignment and firewall policy.
 - Exposing any website to the public Internet.
 - Proxying, renaming or otherwise changing the PVE management endpoint.
 - High availability, VRRP, multiple PVE nodes, multiple Edge VMs or automatic IP failover.
-- Splitting the initial Edge VM into separate firewall/router and reverse-proxy appliances.
+- Adding a reverse-proxy appliance to the initial Edge VM design.
 - Kubernetes, Docker label discovery, Traefik or dynamic service discovery.
 - An automatic DHCP or IPAM service for backend servers; backend addresses remain explicitly assigned.
-- Selecting or purchasing the organisation's registered domain or migrating its authoritative DNS provider.
+- Internal or public DNS, split DNS, hostname routing, ACME, public certificates or certificate-provider selection.
 - Application-level SSO, authorisation, WAF rules or changes to backend application business logic.
 - Granting general Internet access to private guests beyond the outbound flows approved during deployment.
 - Silently substituting a different private subnet when the selected CIDR conflicts with the environment.
@@ -172,9 +168,8 @@ VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 的 80/443 存
 ## Further Notes
 
 - Deployment requires an out-of-band recovery path such as physical console, IPMI or iKVM before modifying PVE networking.
-- The exact FortiOS version, VPN type, VPN client source pool, internal DNS servers, external prefix and gateway must be read from the live approved environment before generating final configuration. These values affect syntax and firewall matching but do not change the selected architecture.
-- The actual application DNS suffix must be a subdomain of an organisation-owned registered domain and must support automated DNS-01 updates.
-- The architecture accepts that the PVE host, Edge VM, FortiGate path, internal DNS and single entrance IP are single points of failure. WireGuard would not remove them.
-- The accompanying architecture research records the primary sources behind the PVE bridge/NAT, FortiClient split DNS, Caddy reverse proxy, DNS-01 and WireGuard decisions.
+- The VPN type is confirmed as FortiClient SSL-VPN, but the exact FortiOS version, complete client pool, policy objects and NAT behavior are unavailable. User-authorized empirical tests from the current VPN session are the accepted deployment gate for TCP `8081`／`8082`; this limitation remains documented and requires retesting after any network change.
+- The architecture accepts that the PVE host, Edge VM, FortiGate path and single entrance IP are single points of failure. WireGuard would not remove them.
+- The accompanying architecture research retains the original DNS/Caddy/TLS option as historical research, but the 2026-08-11 user decision supersedes it for implementation.
 - The `.secrets` directory exists locally, is ignored by Git and contains a backend environment source. Its values remain intentionally absent from this spec.
 - The implementation must preserve unrelated existing `.gitignore` and `.secrets` changes.
