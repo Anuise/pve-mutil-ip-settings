@@ -8,7 +8,7 @@ Status: ready-for-agent
 
 若每個網站或 guest 都要求一個 `10.1.2.x` 位址，現有位址空間無法支撐需求。若另外導入 WireGuard，使用者將需要第二套 VPN、金鑰及路由管理，但它仍不會解決多個 HTTP/HTTPS 網站共用單一入口 IP 的分流問題。
 
-使用者需要的是：只連既有 FortiClient VPN，即可用 `10.1.2.57:<port>` 存取所有內部服務；後端 guest 使用獨立私有 IP，且不對 VPN 使用者直接暴露；既有 PVE 管理路徑不受影響。使用者明確選擇取消 DNS 與公開信任 TLS，以部署速度和操作簡單為優先。
+使用者需要的是：只連既有 FortiClient VPN，即可用 `10.1.2.57:<port>` 存取所有內部服務；後端 guest 使用獨立私有 IP，且不對 VPN 使用者直接暴露；既有 PVE 管理路徑不受影響。使用者明確選擇取消 DNS 與公開信任 TLS，以部署速度和操作簡單為優先。UAT revision 另以 nginx 提供自簽 HTTPS；這不是公開信任 TLS，也不改變 IP＋port 入口設計。
 
 ## Solution
 
@@ -16,9 +16,9 @@ Status: ready-for-agent
 
 PVE 新增一個不連接實體網卡的私有 Linux bridge。Edge VM 的前端網卡連接既有實體 bridge 並使用 `10.1.2.57`；後端網卡連接私有 bridge 並使用 `172.23.57.1/24`。網站 guest 使用 `172.23.57.0/24` 的位址，以 Edge VM 作 default gateway。
 
-每個內部服務配置一個獨立且可稽核的入口 TCP port。初始配置保留 `8081` 給 Type AI Platform、`8082` 給第二個驗證服務；nftables 將每個入口 port DNAT 到指定的私有 backend IP 與 service port。未配置的 port 維持拒絕。
+每個內部服務配置一個獨立且可稽核的入口 TCP port。初始配置保留 `8081` 給 Type AI Platform、`8082` 給第二個驗證服務；nftables 將每個入口 port DNAT 到指定的私有 backend IP 與 service port。未配置的 port 維持拒絕。現行 UAT 將 `8081` 送至 `172.23.57.11:18000`，再由 nginx 終止自簽 HTTPS 並同源轉發 frontend/API。
 
-VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 明確放行的 `10.1.2.57:<port>` 存取服務。初版使用 VPN 內 HTTP，不簽發公開憑證；這表示 FortiGate 解密後至 Edge／backend 的內部路徑沒有應用層 TLS。PVE 管理介面繼續使用 `10.1.2.50:8006`，不經過 Edge 服務入口。
+VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 明確放行的 `10.1.2.57:<port>` 存取服務。UAT 入口使用自簽 HTTPS；不簽發公開信任憑證，也不要求 DNS。PVE 管理介面繼續使用 `10.1.2.50:8006`，不經過 Edge 服務入口。
 
 第一個實際 backend 是 Type AI Platform。它使用 node `pve` 上既有 VM 109（`ub-26-4-srv-docker`）建立 full clone，來源 VM 保持不變。新 VM 接入私有 bridge，專案原始碼、Docker data-root 與應用持久資料均放在 `/srv` 下可用空間最大的適用 filesystem。專案來源為使用者指定的 Type AI Platform Git repository。
 
@@ -31,7 +31,7 @@ VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 明確放行�
 3. As a VPN user, I want different entrance ports to reach the correct applications on the shared IP, so that all required services remain independently usable.
 4. As a VPN user, I want unassigned entrance ports to be rejected, so that I am never sent to an unrelated application.
 5. As a VPN user, I want protocols such as HTTP and WebSocket to pass transparently through the configured port mapping, so that interactive applications behave normally.
-6. As a VPN user, I accept that the initial IP-and-port deployment uses HTTP inside the approved VPN and does not provide publicly trusted TLS.
+6. As a VPN user, I accept that the IP-and-port deployment does not provide publicly trusted TLS; UAT may use a self-signed certificate and require one browser warning bypass, with its expiry and fingerprint monitored.
 7. As a VPN user, I want the port map kept explicit and stable, so that bookmarks and operational documentation remain accurate.
 8. As a VPN user, I want service endpoints documented without embedding credentials, so that connection instructions can be shared safely.
 9. As a VPN user, I want internal websites to be unreachable when I am not connected to the approved VPN, so that they remain internal services.
@@ -55,7 +55,7 @@ VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 明確放行�
 27. As a security administrator, I want all Edge VM input and forwarding chains to default to deny, so that only explicitly allowed flows are possible.
 28. As a security administrator, I want no DNS API token, ACME account key or Edge TLS private key deployed for this design, so that unused secrets do not enlarge the attack surface.
 29. As a security administrator, I want backend applications not to trust client-supplied proxy headers because the Edge does not generate trusted proxy metadata.
-30. As a security administrator, I want any future TLS addition treated as a separately approved hardening change, so that certificate validation is not silently disabled.
+30. As a security administrator, I want the UAT self-signed TLS exception to be explicit and monitored, and any production TLS addition treated as a separately approved hardening change, so that certificate validation is not silently disabled.
 31. As an operator, I want nftables configuration validated before reload, so that an invalid change does not interrupt every service.
 32. As an operator, I want Edge VM services and networking to start automatically after reboot, so that a host restart does not require manual recovery.
 33. As an operator, I want health checks for each allocated `IP:port`, backend routing and application response, so that failures are detected before users report them.
@@ -89,7 +89,7 @@ VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 明確放行�
 - The application is checked out from `https://source.mobagel.com/type-ai-platform/type-ai-platform.git`. The deployed revision is recorded for audit and rollback. The repository is hosted on a sign-in-protected GitLab instance; if no approved non-interactive credential is already available, cloning pauses under `[HUMAN ACTION]`.
 - Before deployment, the implementation enumerates filesystems mounted at or below `/srv` and chooses the suitable filesystem with the greatest available capacity. If projected deployment would leave less than twenty percent free space, deployment stops with `[HUMAN ACTION]` rather than selecting the root filesystem or deleting data.
 - The project checkout, Docker data-root, bind-mounted application state and named-volume backing data for this dedicated clone are all located below the selected `/srv` filesystem. Existing unrelated data is not moved or deleted.
-- Before creating or changing a deployment `.env`, implementation reads the corresponding backend environment source in the ignored `.secrets` hierarchy and compares it with the application's required environment schema or example.
+- Before creating or changing a deployment `.env`, implementation reads the corresponding backend environment source in the ignored `.secrets` hierarchy and compares it with the application's required environment schema or example. UAT-only database passwords may be generated once at first setup when the source has no corresponding values, but must be preserved on normal updates.
 - Secret values are never printed, copied into ticket text, committed, or included in test artifacts. When a required key is absent, only its key name is reported and work pauses under `[HUMAN ACTION]`; values are never invented.
 - Any step that needs the user's credentials, infrastructure approval, FortiGate administration, PVE console access, destructive confirmation or missing secret is marked `[HUMAN ACTION]`. The agent must stop at that gate until the user explicitly confirms completion.
 - The Edge VM uses two NICs: a front NIC on the existing PVE physical bridge and a back NIC on a new private bridge.
@@ -103,7 +103,8 @@ VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 明確放行�
 - Each published service has one auditable `front_port -> backend_ip:backend_port` mapping. There is no automatic discovery or catch-all destination.
 - Unassigned front ports are rejected by the default-deny policy. A request cannot fall through to another backend.
 - DNAT preserves the original application protocol and does not add trusted proxy headers. Backends must not trust client-supplied `Forwarded` or `X-Forwarded-*` headers as Edge identity evidence.
-- The initial user-facing transport is HTTP inside the approved FortiClient VPN. No public certificate, internal CA or self-signed certificate is deployed. Adding TLS later requires a separate design and acceptance change.
+- The current UAT user-facing transport is HTTPS inside the approved FortiClient VPN, using a self-signed certificate generated by the UAT nginx container. No publicly trusted certificate, DNS or internal CA is deployed.
+- The UAT nginx certificate and key live in the named `type-ai-platform-uat_nginx-certs` volume. A protected expected SHA-256 fingerprint is checked by the backend health timer together with a 30-day expiry threshold; `curl -k` is documented only for this fixed UAT endpoint.
 - nftables is the firewall and NAT implementation on the Edge VM. No second firewall appliance is introduced in the initial architecture.
 - Edge VM input and forward policy default to deny. Input permits loopback, required ICMP, established or related traffic and approved administrative SSH. Forward permits approved VPN sources only to explicitly allocated DNAT ports.
 - Front-to-private forwarding is denied except for the exact DNAT tuples declared in the port map.
@@ -125,7 +126,7 @@ VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 明確放行�
 - `10.1.2.57:8082` must return a distinguishable response from the temporary second backend during multi-service acceptance.
 - Before permanent publication, the same approved FortiClient client must repeat `Test-NetConnection` against each allocated port. Both temporary preflight probes and final service probes must be recorded with source address, destination and result.
 - An unassigned entrance port must fail closed and must not reach any backend.
-- No DNS lookup, hostname, certificate or HTTPS redirect is required by this design.
+- No DNS lookup or hostname is required by this design. UAT HTTPS uses an IP and port and may show a self-signed certificate warning; a publicly trusted certificate is not a requirement.
 - A VPN client must have no route to the private subnet and must fail to connect directly to backend addresses.
 - A VPN user in the ordinary website access group must not gain access to the PVE management endpoint.
 - A backend guest must reach approved update destinations through the Edge VM's NAT path.

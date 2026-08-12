@@ -36,7 +36,7 @@
 ### 2026-08-11 repository checkout completed; `[HUMAN ACTION]` environment correction required
 
 - 使用者已輪替 GitLab token。新 token 透過 SSH stdin 與短生命週期 `GIT_ASKPASS` 使用，未放入 URL、process argument、remote URL 或永久 credential store；clone 後再次驗證沒有臨時 askpass directory、`~/.netrc` 或 `~/.git-credentials`。
-- 核准來源已 clone 到 `/srv/platform/type-ai-platform`。Branch 為 `main`，immutable revision 為 `0f1816f4585668847c0c7e1f9fe348a8327d1dde`，working tree clean，origin 不含 credential。Checkout 約 25M；`/srv/platform` 仍有約 75G 可用（1% used）。
+- 核准來源初始 clone 到 `/srv/platform/type-ai-platform` 的 revision 為 `0f1816f4585668847c0c7e1f9fe348a8327d1dde`；2026-08-12 UAT cutover 已 fast-forward 到 `25201dbf1ba3475ebe9a69356c551e6394937f26`，working tree clean，origin 不含 credential。
 - 已在不輸出 value 的前提下，比對 `apps/backend/.env.example`、`Settings` schema 與 repository-local `.secrets/apps/backend/.env`。必填 `ENV`、`DATABASE_URL`、`CLICKHOUSE_URL`、`SESSION_SECRET` 均存在；URL scheme 與 `ENV` enum 格式通過。
 - `SESSION_SECRET` 未達此次部署採用的 32 字元最低安全門檻，因此停止在啟動 containers 之前。請在 ignored source `.secrets/apps/backend/.env` 更新為至少 32 字元的強隨機值，不要將 value 貼入對話或 ticket。
 - `LEADTEK_API_KEY` 未出現在 secret source，但目前程式 schema 定義為 optional，不是本階段啟動阻擋；其餘 optional keys 依 source 保持原狀。
@@ -45,9 +45,18 @@
 
 - 使用者授權直接產生新 `SESSION_SECRET`，且沒有既有 session 需保留。以 cryptographic RNG 產生 32 random bytes 後寫入 ignored `.secrets/apps/backend/.env`；只驗證單一 key 存在、長度至少 32 字元與 `git check-ignore=True`，value 未出現在對話、terminal、issue、Git diff 或 log。
 - Env source 以 SCP 傳入 VM 105 的 `apps/backend/.env`，mode `0600`；remote repo 亦確認該檔被 Git ignore。Compose `config -q` 通過，沒有輸出 resolved environment。
-- Repository 只提供 development Dockerfiles／Compose，production image 與 K8s manifests 尚未完成。本輪依現有受支持入口部署 Postgres 16、ClickHouse 24.8 與 FastAPI backend；未把 dev stack 誤標為 production-ready，也未提前啟用 frontend。
+- 初始部署時 repository 只提供 development Dockerfiles／Compose；2026-08-12 UAT revision 新增 `Dockerfile.prod`、UAT Compose 與 nginx。現行 VM 使用 UAT frontend、backend、poller、Postgres、ClickHouse、nginx，但仍未標示為 production-ready。
 - 建立 Git 之外的 `/srv/platform/app-data/type-ai-platform/compose.deploy.yml`：Postgres `15432` 與 ClickHouse `8123` 只綁 `127.0.0.1`；backend 只綁 `172.23.57.11:18000`；三個 containers 使用 `unless-stopped`。
 - Repository 的 dev Compose 對 ClickHouse 設密碼但原 backend URL 未帶認證，第一次 telemetry migration 因此 fail closed。Deployment override 使用 repo 既有 dev credential 修正 URL 後，PostgreSQL Alembic revisions 與 ClickHouse telemetry schema 均成功套用。
 - Backend VM 本機與 Edge `172.23.57.1` 均取得 `172.23.57.11:18000/healthz` 的 `{"status":"ok"}`。在 DNAT 啟用前，VPN client 的 `10.1.2.57:8081` 仍為 closed，符合先私網驗收再發布的順序。
 - Docker `DOCKER-USER` 只允許 Edge `172.23.57.1` 進入 original destination port `18000`，其餘來源 rate-limited log 後 drop。以 Edge 暫時來源 `172.23.57.99` 驗證被拒絕，正式來源 `.1` 通過；systemd unit 使規則在 Docker 啟動後自動恢復。
 - 部署後 `/srv/platform` 使用約 308M／79G，可用約 74G（1% used）；checkout、Docker root、named volumes 與 app data 均位於此 filesystem，遠高於百分之二十 headroom gate。
+
+### 2026-08-12 UAT Docker deployment completed
+
+- 以短生命週期 GitLab askpass 從本機 ignored token source fetch／fast-forward 到 `25201dbf1ba3475ebe9a69356c551e6394937f26`；remote URL 不含 credential，working tree clean。
+- 遠端新增的 UAT 定義包含 `docker-compose.uat.yml`、`apps/backend/Dockerfile.prod`、`apps/frontend/Dockerfile.prod` 與 nginx entrypoint。UAT `.env.uat` 為 mode `0600`，資料庫密碼與 `SESSION_SECRET` 以 cryptographic RNG 產生；值未出現在對話、log、ticket 或 Git。
+- 建立 Git 之外的 `/srv/platform/app-data/type-ai-platform/compose.uat.deploy.yml`，將 nginx 的 container `443` 綁定至 `172.23.57.11:18000`；UAT 使用 `ENV=dev` 假 SSO，partner 欄位留空，沒有帶入未核准環境憑證。
+- UAT frontend、backend、poller、Postgres、ClickHouse、nginx 全部 running；PostgreSQL Alembic 與 ClickHouse telemetry migrations 成功。`/srv/platform` Docker root 與 UAT volumes 均在 `/srv/platform`，使用率約 2%。
+- UAT nginx certificate volume `type-ai-platform-uat_nginx-certs` 已建立；其 certificate fingerprint 由 volume 內的 `server.crt` 初始化至 root-owned `/etc/type-ai-platform/uat-nginx-cert.sha256`，backend health timer 已通過 30-day expiry 與 fingerprint check。
+- Backend 與 Edge 私網 `https://172.23.57.11:18000/healthz` 回 `{"status":"ok"}`；UAT 入口透過既有 `10.1.2.57:8081` DNAT 提供 frontend、`/healthz`、`/docs`、`/openapi.json` HTTP 200，並以測試 email 完成 dev-login 與 `/internal/v1/me` 200。

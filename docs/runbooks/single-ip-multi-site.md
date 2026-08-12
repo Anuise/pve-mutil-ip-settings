@@ -5,9 +5,11 @@
 | Role | PVE VM | Address | Published mapping |
 | --- | --- | --- | --- |
 | Edge | 104 `single-ip-edge` | `10.1.2.57/24`, `172.23.57.1/24` | TCP `8081` |
-| Type AI backend | 105 `type-ai-platform-backend` | `172.23.57.11/24` | `8081 -> 172.23.57.11:18000` |
+| Type AI UAT | 105 `type-ai-platform-backend` | `172.23.57.11/24` | `8081 -> 172.23.57.11:18000 -> nginx:443` |
 
-The initial client URL is `http://10.1.2.57:8081`. It is HTTP inside the existing FortiClient VPN. DNS, ACME, public TLS, WireGuard and hostname routing are not part of this deployment.
+The current client URL is `https://10.1.2.57:8081`. It uses the UAT nginx self-signed certificate; the browser will show a certificate warning once. DNS, ACME, publicly trusted TLS, WireGuard and hostname routing are not part of this deployment.
+
+UAT is built from application revision `25201dbf1ba3475ebe9a69356c551e6394937f26`. Its `ENV=dev` fake SSO is for trusted-network testing only; do not place real personal data in this environment.
 
 The applied Edge ruleset is tracked at `.scratch/single-ip-multi-site-network/nftables.edge.conf`. Unallocated ports have no DNAT rule and fail closed.
 
@@ -17,7 +19,7 @@ From an approved FortiClient session:
 
 ```powershell
 Test-NetConnection 10.1.2.57 -Port 8081
-Invoke-WebRequest -UseBasicParsing http://10.1.2.57:8081/healthz
+curl.exe -kfsS https://10.1.2.57:8081/healthz
 ```
 
 Expected health body:
@@ -32,7 +34,7 @@ Edge checks:
 sudo systemctl status nftables single-ip-edge-health.timer
 cat /proc/sys/net/ipv4/ip_forward
 sudo nft list ruleset
-curl -fsS http://172.23.57.11:18000/healthz
+curl -kfsS https://172.23.57.11:18000/healthz
 ```
 
 Backend checks, reached through the Edge SSH jump host:
@@ -40,10 +42,16 @@ Backend checks, reached through the Edge SSH jump host:
 ```bash
 systemctl status docker type-ai-platform-firewall.service type-ai-platform-health.timer
 docker inspect --format={{.State.Status}} \
-  type-ai-platform-postgres-1 \
-  type-ai-platform-clickhouse-1 \
-  type-ai-platform-backend-1
-curl -fsS http://172.23.57.11:18000/healthz
+  type-ai-platform-uat-postgres-1 \
+  type-ai-platform-uat-clickhouse-1 \
+  type-ai-platform-uat-backend-1 \
+  type-ai-platform-uat-poller-1 \
+  type-ai-platform-uat-frontend-1 \
+  type-ai-platform-uat-nginx-1
+iptables -C DOCKER-USER -i eth0 -s 172.23.57.1/32 -p tcp -m conntrack --ctorigdstport 18000 -j ACCEPT
+iptables -C DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 18000 -m limit --limit 5/second --limit-burst 10 -j LOG --log-prefix 'type-ai-drop '
+iptables -C DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 18000 -j DROP
+curl -kfsS https://172.23.57.11:18000/healthz
 df -hT /srv/platform
 ```
 
@@ -58,34 +66,86 @@ journalctl -k -g type-ai-drop
 
 These checks must not print `.env`, tokens or authorization headers.
 
+### UAT certificate lifecycle
+
+The UAT nginx container creates a self-signed certificate and key in the named
+volume `type-ai-platform-uat_nginx-certs`. Recreating containers does not
+replace the certificate while that volume is retained; deleting or restoring
+without the volume creates a new certificate and requires a new browser
+exception. The protected backup must therefore include that volume and the
+root-owned fingerprint file
+`/etc/type-ai-platform/uat-nginx-cert.sha256`.
+
+Initialize that file from the certificate in the named volume, using an atomic
+root-owned write, before enabling the timer:
+
+```bash
+sudo install -d -o root -g root -m 0755 /etc/type-ai-platform
+tmp=$(sudo mktemp /etc/type-ai-platform/.uat-nginx-cert.sha256.XXXXXX)
+trap 'sudo rm -f "$tmp"' EXIT
+sudo openssl x509 \
+  -in /srv/platform/docker/volumes/type-ai-platform-uat_nginx-certs/_data/server.crt \
+  -noout -fingerprint -sha256 |
+  sed 's/^sha256 Fingerprint=//; s/://g' | sudo tee "$tmp" >/dev/null
+sudo chown root:root "$tmp"
+sudo chmod 0644 "$tmp"
+sudo mv -f "$tmp" /etc/type-ai-platform/uat-nginx-cert.sha256
+trap - EXIT
+```
+
+The backend health timer extracts the certificate from
+`172.23.57.11:18000`, requires at least 30 days before expiry, and compares its
+SHA-256 fingerprint with that file. `curl -k` is an explicit exception only for
+this fixed private UAT endpoint because the certificate is self-signed; it does
+not disable certificate validation for a future production endpoint.
+
 ## Update Type AI Platform
 
 1. Confirm `/srv/platform` will retain at least 20% free space.
 2. Obtain the approved revision from `https://source.mobagel.com/type-ai-platform/type-ai-platform.git` using a read-only, non-interactive GitLab credential. Do not embed the credential in the remote URL or persist it in the checkout.
 3. Keep the checkout at `/srv/platform/type-ai-platform` and record `git rev-parse HEAD`.
-4. Compare `apps/backend/.env.example` and `Settings` with the ignored source `.secrets/apps/backend/.env`. Report key names and validation state only.
-5. Transfer the environment file to `apps/backend/.env`, set mode `0600`, confirm it is Git ignored, and run Compose validation without rendering resolved values:
+4. Compare `.env.uat.example` and `Settings`. On the first setup only, create
+   the ignored `.env.uat` with cryptographically random UAT-only database
+   passwords and the approved `SESSION_SECRET`, then set mode `0600`. For a
+   normal update, preserve the existing `.env.uat`, database passwords and
+   `SESSION_SECRET`; do not regenerate or overwrite them. Validate required key
+   names, `ENV=dev`, `UAT_SERVER_NAME`, mode `0600` and Git-ignore status without
+   printing values. Keep partner fields empty unless separately approved UAT
+   endpoints and credentials exist.
+5. Keep the checkout at `25201dbf1ba3475ebe9a69356c551e6394937f26` (or a newer approved main revision) and run UAT Compose validation without rendering resolved values:
 
    ```bash
-   docker compose \
-     -f docker-compose.dev.yml \
-     -f /srv/platform/app-data/type-ai-platform/compose.deploy.yml \
-     --profile backend config -q
+   docker compose --env-file .env.uat \
+     -f docker-compose.uat.yml \
+     -f /srv/platform/app-data/type-ai-platform/compose.uat.deploy.yml \
+     config -q
    ```
 
-6. Build and start the backend stack:
+6. Build and start the UAT stack:
 
    ```bash
-   docker compose \
-     -f docker-compose.dev.yml \
-     -f /srv/platform/app-data/type-ai-platform/compose.deploy.yml \
-     --profile backend up -d --build postgres clickhouse backend
+   docker compose --env-file .env.uat \
+     -f docker-compose.uat.yml \
+     -f /srv/platform/app-data/type-ai-platform/compose.uat.deploy.yml \
+     build
+   docker compose --env-file .env.uat \
+     -f docker-compose.uat.yml \
+     -f /srv/platform/app-data/type-ai-platform/compose.uat.deploy.yml \
+     run --rm backend alembic upgrade head
+   docker compose --env-file .env.uat \
+     -f docker-compose.uat.yml \
+     -f /srv/platform/app-data/type-ai-platform/compose.uat.deploy.yml \
+     run --rm backend python -m app.telemetry.clickhouse
+   docker compose --env-file .env.uat \
+     -f docker-compose.uat.yml \
+     -f /srv/platform/app-data/type-ai-platform/compose.uat.deploy.yml \
+     up -d
    ```
 
-7. Apply PostgreSQL and ClickHouse migrations with the same two Compose files, then pass private health from the Edge before changing any DNAT rule.
-8. Re-run the VPN seam, direct-private deny, unallocated-port deny and storage checks.
+7. Pass private UAT health from the Edge before changing any DNAT rule.
+8. Re-run the VPN seam, frontend/login smoke test, direct-private deny, unallocated-port deny and storage checks.
 
-The repository currently supplies development Dockerfiles and Compose configuration. A production frontend image and production manifests are not yet available; do not label this stack production-ready until those artifacts and the single-port frontend/API flow are delivered and tested.
+The UAT frontend/API flow is now available through the same nginx port. It is still not production-ready: UAT uses a self-signed certificate and `ENV=dev` fake SSO; production Kubernetes manifests and real SSO remain separate work.
 
 ## Add an entrance port
 
@@ -126,7 +186,11 @@ Backups must include:
 - the deployed immutable Git revision;
 - `/srv/platform` Docker volumes and persistent application data.
 
-The ignored `.secrets` hierarchy requires a separately approved protected backup. It must not be copied into Git, tickets, ordinary logs or an unencrypted VM backup export. This design has no DNS API token, ACME account key or Edge TLS private key.
+The ignored `.secrets` hierarchy, the remote `.env.uat`, the UAT nginx
+certificate volume and the root-owned fingerprint file require a separately
+approved encrypted/protected backup. They must not be copied into Git, tickets,
+ordinary logs or an unencrypted VM backup export. This design has no DNS API
+token or ACME account key.
 
 An actual restore drill must target an isolated VMID/network and must not overwrite VM 104 or VM 105. After restore, verify resources, private addresses, `/srv` placement and headroom, then repeat every black-box check before cutover.
 
@@ -136,4 +200,4 @@ An actual restore drill must target an isolated VMID/network and must not overwr
 - Off-VPN/public Internet reachability has not been tested from an independent external client.
 - A general service-user identity distinct from the current PVE-capable VPN session has not been used to prove FortiGate-level PVE denial.
 - PVE host reboot and an isolated restore drill have not been approved or executed.
-- Production frontend image, same-port frontend/API routing and the full UI workflow are not available in the current application revision.
+- UAT frontend, same-port frontend/API routing and the dev-login smoke flow are verified; production frontend deployment, real SSO and trusted TLS remain out of scope.

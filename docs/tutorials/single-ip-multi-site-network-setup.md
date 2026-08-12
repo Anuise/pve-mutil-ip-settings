@@ -1,15 +1,16 @@
 # 單一 IP、多服務 Port 的 PVE 私有網路架設教學
 
-本教學說明如何在 Proxmox VE（PVE）上，以一個既有內部 IP `10.1.2.57` 對 FortiClient VPN 使用者發布多個服務。每個服務使用不同 TCP port，backend VM 不取得額外 `10.1.2.x` 位址，也不使用 DNS、WireGuard、公開 TLS 或 hostname routing。
+本教學說明如何在 Proxmox VE（PVE）上，以一個既有內部 IP `10.1.2.57` 對 FortiClient VPN 使用者發布多個服務。每個服務使用不同 TCP port，backend VM 不取得額外 `10.1.2.x` 位址，也不使用 DNS、WireGuard、公開信任 TLS 或 hostname routing。
 
 內容以本環境實際完成並驗證的部署為基準；秘密值、GitLab token、VPN 帳密與應用 `.env` value 均不會出現在文件中。
 
-> 目前可用成果是 Type AI Platform backend API：
+> 目前已切換到 repository UAT revision `25201dbf1ba3475ebe9a69356c551e6394937f26`，由 UAT Compose 提供同源 frontend、backend、poller、Postgres、ClickHouse 與 nginx：
 >
-> - API 文件：`http://10.1.2.57:8081/docs`
-> - 健康檢查：`http://10.1.2.57:8081/healthz`
+> - 入口：`https://10.1.2.57:8081`（自簽憑證，瀏覽器需略過一次警告）
+> - API 文件：`https://10.1.2.57:8081/docs`
+> - 健康檢查：`https://10.1.2.57:8081/healthz`
 >
-> 來源 repository 目前只提供 development Dockerfiles／Compose，尚未提供 production frontend image 與單埠同源 UI routing；因此本教學不能把現況宣稱為完整 production frontend。
+> UAT 的 `ENV=dev` 只啟用測試用假 SSO；不得放真實個資，也不能把此環境稱為 production-ready。UAT `Dockerfile.prod` image 與 production Kubernetes manifests 仍是不同交付階段。
 
 ## 1. 架構與流量路徑
 
@@ -20,10 +21,10 @@ flowchart LR
     E0["Edge VM 104 eth0<br/>10.1.2.57/24"]
     E1["Edge VM 104 eth1<br/>172.23.57.1/24"]
     B["Backend VM 105<br/>172.23.57.11/24"]
-    A["FastAPI container<br/>host port 18000"]
+    A["UAT nginx<br/>host 18000 → container 443<br/>backend/frontend same origin"]
     P["PVE host<br/>10.1.2.50:8006"]
 
-    C -->|"HTTP 10.1.2.57:8081"| F
+    C -->|"HTTPS 10.1.2.57:8081"| F
     F -->|"TCP 8081"| E0
     E0 -->|"DNAT 8081 → 172.23.57.11:18000<br/>SNAT → 172.23.57.1"| E1
     E1 --> B
@@ -48,8 +49,8 @@ Edge VM 是唯一網路邊界，不執行網站容器。正式應用放在私有
 | Edge 私有位址 | `172.23.57.1/24` |
 | Backend VM | VM 105 `type-ai-platform-backend` |
 | Backend 位址 | `172.23.57.11/24`，gateway `172.23.57.1` |
-| Type AI entrance | TCP `8081` |
-| Type AI backend endpoint | `172.23.57.11:18000` |
+| Type AI entrance | TCP `8081`，HTTPS UAT nginx |
+| Type AI backend endpoint | `172.23.57.11:18000` → nginx container `443` |
 | 來源 template | VM 109 `ub-26-4-srv-docker` |
 | VM storage | `VMdisk`；不使用 `local-zfs` |
 
@@ -524,122 +525,109 @@ git status --short
 本次部署 revision：
 
 ```text
-0f1816f4585668847c0c7e1f9fe348a8327d1dde
+25201dbf1ba3475ebe9a69356c551e6394937f26
 ```
 
 ### 8.3 比對環境 key
 
 比對：
 
-- `apps/backend/.env.example`；
+- `.env.uat.example`；
 - `apps/backend/app/config.py` 的 `Settings`；
 - ignored `.secrets/apps/backend/.env`。
 
 只回報 key 名稱、required／optional、present／empty／missing 與格式結果。不要輸出 value。
 
-本 revision 的必填 key：
+UAT 由 Compose interpolation 與 backend `env_file` 使用下列 key：
 
 ```text
 ENV
-DATABASE_URL
-CLICKHOUSE_URL
 SESSION_SECRET
+POSTGRES_PASSWORD
+CLICKHOUSE_PASSWORD
+UAT_SERVER_NAME
 ```
 
-傳入 backend VM：
+`DATABASE_URL` 與 `CLICKHOUSE_URL` 不放在 `.env.uat`；UAT Compose 會以 compose service name 與資料庫密碼組合它們。不要把開發用 `apps/backend/.env` 上傳後誤當成 UAT 設定。部署時只把本機 ignored source 的 `SESSION_SECRET` 安全地帶入遠端 `.env.uat`，資料庫密碼在 backend VM 上以 cryptographic RNG 產生。
 
-```powershell
-scp -o ProxyJump=leadtek-type-ai-platform `
-  -i C:\Users\User\.ssh\ci-template-key `
-  .secrets\apps\backend\.env `
-  mobagel@172.23.57.11:/srv/platform/type-ai-platform/apps/backend/.env.new
-```
+遠端驗證只報告 key 名稱、存在狀態、格式與 mode `0600`，不輸出任何 value；`.env.uat` 必須被 Git ignore。
 
-再於 VM 內：
+## 9. 部署 UAT containers
 
-```bash
-chmod 0600 apps/backend/.env.new
-mv apps/backend/.env.new apps/backend/.env
-git check-ignore -q apps/backend/.env
-```
+UAT 使用 repository 的 `docker-compose.uat.yml`，由同一套 `Dockerfile.prod` 建立 frontend／backend image，並以 nginx 將 frontend 與 API 維持同源。UAT 的 `ENV` 必須是 `dev`，因為目前登入是測試用假 SSO；不可放真實個資。
 
-## 9. 部署 backend containers
+### 9.1 建立 UAT env 與 host-port override
 
-### 9.1 Deployment override
-
-Repository 內的 `docker-compose.dev.yml` 會把 Postgres、ClickHouse ports 綁到所有介面，而且 backend 的 ClickHouse URL 與 dev password 不一致。本環境建立 Git 之外的 override：
+首次部署時，在 backend VM 產生 `/srv/platform/type-ai-platform/.env.uat`，設定 mode `0600`，至少包含：
 
 ```text
-/srv/platform/app-data/type-ai-platform/compose.deploy.yml
+UAT_SERVER_NAME=10.1.2.57
+POSTGRES_PASSWORD=<random>
+CLICKHOUSE_PASSWORD=<random>
+ENV=dev
+SESSION_SECRET=<random>
+```
+
+不要把值寫入 Git、ticket、terminal transcript 或一般 log。UAT 入口需使用 backend host port `18000`，但將它接到 nginx container 的 HTTPS `443`，因此在 Git 之外建立：
+
+```text
+/srv/platform/app-data/type-ai-platform/compose.uat.deploy.yml
 ```
 
 ```yaml
 services:
-  postgres:
-    restart: unless-stopped
+  nginx:
     ports: !override
-      - "127.0.0.1:15432:5432"
-  clickhouse:
-    restart: unless-stopped
-    ports: !override
-      - "127.0.0.1:8123:8123"
-  backend:
-    restart: unless-stopped
-    environment:
-      # 這是 repository 既有的拋棄式 dev credential，不可用於 production。
-      CLICKHOUSE_URL: http://default:clickhouse@clickhouse:8123
-    ports: !override
-      - "172.23.57.11:18000:8000"
+      - "172.23.57.11:18000:443"
 ```
+
+UAT nginx 會把自簽 certificate／key 放在 named volume
+`type-ai-platform-uat_nginx-certs`。一般 container rebuild 會保留這個 volume，
+所以不會無故改變瀏覽器例外；刪除 volume 或從沒有該 volume 的備份還原時，
+必須視為憑證輪替並重新記錄 SHA-256 fingerprint。正常更新不得重新產生
+`.env.uat` 的資料庫密碼或 `SESSION_SECRET`；只有另行核准的 rotation 才能改值。
+
+### 9.2 UAT build、migration 與啟動
 
 先做 quiet validation，避免印出 resolved env：
 
 ```bash
-docker compose \
-  -f docker-compose.dev.yml \
-  -f /srv/platform/app-data/type-ai-platform/compose.deploy.yml \
-  --profile backend config -q
+docker compose --env-file .env.uat \
+  -f docker-compose.uat.yml \
+  -f /srv/platform/app-data/type-ai-platform/compose.uat.deploy.yml \
+  config -q
 ```
 
-### 9.2 Build 與 migrations
+停止舊 dev stack 時不要加 `-v`，保留既有 volumes；再建置並套用兩套 migration：
 
 ```bash
-docker compose \
-  -f docker-compose.dev.yml \
-  -f /srv/platform/app-data/type-ai-platform/compose.deploy.yml \
-  --profile backend up -d --build postgres clickhouse backend
+docker compose --env-file .env.uat \
+  -f docker-compose.uat.yml \
+  -f /srv/platform/app-data/type-ai-platform/compose.uat.deploy.yml \
+  build
+
+docker compose --env-file .env.uat \
+  -f docker-compose.uat.yml \
+  -f /srv/platform/app-data/type-ai-platform/compose.uat.deploy.yml \
+  run --rm backend alembic upgrade head
+
+docker compose --env-file .env.uat \
+  -f docker-compose.uat.yml \
+  -f /srv/platform/app-data/type-ai-platform/compose.uat.deploy.yml \
+  run --rm backend python -m app.telemetry.clickhouse
+
+docker compose --env-file .env.uat \
+  -f docker-compose.uat.yml \
+  -f /srv/platform/app-data/type-ai-platform/compose.uat.deploy.yml \
+  up -d
 ```
 
-套用 PostgreSQL：
+### 9.3 私網 UAT health gate
+
+Backend VM 與 Edge VM 都使用自簽 HTTPS 驗證：
 
 ```bash
-docker compose \
-  -f docker-compose.dev.yml \
-  -f /srv/platform/app-data/type-ai-platform/compose.deploy.yml \
-  --profile backend run --rm backend uv run alembic upgrade head
-```
-
-套用 ClickHouse telemetry schema：
-
-```bash
-docker compose \
-  -f docker-compose.dev.yml \
-  -f /srv/platform/app-data/type-ai-platform/compose.deploy.yml \
-  --profile backend run --rm backend uv run python -m app.telemetry.clickhouse
-```
-
-### 9.3 私網 health gate
-
-Backend 本機：
-
-```bash
-curl -fsS http://172.23.57.11:18000/healthz
-```
-
-Edge VM：
-
-```bash
-curl -fsS http://172.23.57.11:18000/healthz
+curl -kfsS https://172.23.57.11:18000/healthz
 ```
 
 兩者都必須回：
@@ -648,7 +636,34 @@ curl -fsS http://172.23.57.11:18000/healthz
 {"status":"ok"}
 ```
 
-此時 Edge 尚未有 8081 DNAT；VPN client 應仍無法存取服務。
+自簽例外只適用於固定的 UAT 私有端點。部署時把目前 certificate 的 SHA-256
+fingerprint 從 named volume 的 `server.crt` 建立後，以 atomic write 寫入
+root-owned `0644` 檔案 `/etc/type-ai-platform/uat-nginx-cert.sha256`（只寫
+fingerprint，不要寫入 ticket 或一般 log），並以 `openssl x509 -checkend
+2592000` 檢查至少 30 天有效期。`type-ai-platform-health.timer` 會週期性比對
+fingerprint 與有效期；expected file 只讀，不從可由 application user 寫入的
+`/srv/platform/app-data` 目錄載入。
+
+初始化 pin 時只從 named volume 的 `server.crt` 讀取，並以 root-owned atomic
+write 建立檔案；此指令不輸出 fingerprint value：
+
+```bash
+sudo install -d -o root -g root -m 0755 /etc/type-ai-platform
+tmp=$(sudo mktemp /etc/type-ai-platform/.uat-nginx-cert.sha256.XXXXXX)
+trap 'sudo rm -f "$tmp"' EXIT
+sudo openssl x509 \
+  -in /srv/platform/docker/volumes/type-ai-platform-uat_nginx-certs/_data/server.crt \
+  -noout -fingerprint -sha256 |
+  sed 's/^sha256 Fingerprint=//; s/://g' | sudo tee "$tmp" >/dev/null
+sudo chown root:root "$tmp"
+sudo chmod 0644 "$tmp"
+sudo mv -f "$tmp" /etc/type-ai-platform/uat-nginx-cert.sha256
+trap - EXIT
+```
+
+這不是把憑證驗證靜默關閉，未來 production endpoint 必須改用可驗證的信任鏈。
+
+確認 backend、frontend、poller、Postgres、ClickHouse、nginx 都 running 且 migration 成功後，才保留 Edge 的 8081 DNAT。
 
 ### 9.4 Backend service-port source restriction
 
@@ -736,14 +751,16 @@ iifname "eth0" oifname "eth1" \
 
 ```powershell
 Test-NetConnection 10.1.2.57 -Port 8081
-Invoke-WebRequest -UseBasicParsing http://10.1.2.57:8081/healthz
-Invoke-WebRequest -UseBasicParsing http://10.1.2.57:8081/docs
-Invoke-WebRequest -UseBasicParsing http://10.1.2.57:8081/openapi.json
+curl.exe -kfsS https://10.1.2.57:8081/healthz
+curl.exe -kfsS -o NUL -w "%{http_code}`n" https://10.1.2.57:8081/docs
+curl.exe -kfsS -o NUL -w "%{http_code}`n" https://10.1.2.57:8081/openapi.json
 ```
 
 同時確認：
 
-- 8081 TCP 成功、HTTP 200；
+- 8081 TCP 成功、HTTPS health／docs／openapi 回 HTTP 200；
+- `https://10.1.2.57:8081/` 回 frontend HTTP 200；
+- UAT `ENV=dev` 的 `/internal/v1/auth/dev/login` 與 `/internal/v1/me` 僅使用測試 email 驗證，不使用真實個資；
 - 8082、8083 等未配置 ports 失敗；
 - `172.23.57.11:18000` 無法由 VPN client 直接連線；
 - `10.1.2.50:8006` 的既有管理路徑未被本功能修改。
@@ -786,7 +803,7 @@ Invoke-WebRequest -UseBasicParsing http://10.1.2.57:8081/openapi.json
 - `net.ipv4.ip_forward=1`；
 - nftables active；
 - 8081 DNAT tuple 存在；
-- Edge 到 `.11:18000/healthz` 正常。
+- Edge 以 `curl -k` 到 `.11:18000/healthz` 正常。
 
 在 Edge 建立 script、oneshot service 與 timer：
 
@@ -797,7 +814,7 @@ set -eu
 test "$(cat /proc/sys/net/ipv4/ip_forward)" = "1"
 systemctl is-active --quiet nftables
 nft list chain ip edge_nat prerouting | grep -Fq 'tcp dport 8081 dnat to 172.23.57.11:18000'
-test "$(curl -fsS --max-time 5 http://172.23.57.11:18000/healthz)" = '{"status":"ok"}'
+test "$(curl -kfsS --max-time 5 https://172.23.57.11:18000/healthz)" = '{"status":"ok"}'
 EOF
 sudo chmod 0755 /usr/local/sbin/single-ip-edge-health
 
@@ -836,8 +853,9 @@ sudo systemctl enable --now single-ip-edge-health.timer
 `type-ai-platform-health.timer` 每五分鐘檢查：
 
 - Docker active；
-- Postgres、ClickHouse、backend 三個 containers running；
+- UAT 的 Postgres、ClickHouse、backend、poller、frontend、nginx containers running；
 - backend health；
+- UAT certificate 至少 30 天有效，且 SHA-256 fingerprint 與受保護的 expected file 相符；
 - outbound HTTPS；
 - `/srv/platform` used 不超過 80%。
 
@@ -852,10 +870,25 @@ systemctl is-active --quiet type-ai-platform-firewall.service
 iptables -C DOCKER-USER -i eth0 -s 172.23.57.1/32 -p tcp -m conntrack --ctorigdstport 18000 -j ACCEPT
 iptables -C DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 18000 -m limit --limit 5/second --limit-burst 10 -j LOG --log-prefix 'type-ai-drop '
 iptables -C DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 18000 -j DROP
-for container in type-ai-platform-postgres-1 type-ai-platform-clickhouse-1 type-ai-platform-backend-1; do
+for container in \
+  type-ai-platform-uat-postgres-1 \
+  type-ai-platform-uat-clickhouse-1 \
+  type-ai-platform-uat-backend-1 \
+  type-ai-platform-uat-poller-1 \
+  type-ai-platform-uat-frontend-1 \
+  type-ai-platform-uat-nginx-1; do
   test "$(docker inspect --format={{.State.Running}} "$container")" = "true"
 done
-test "$(curl -fsS --max-time 5 http://172.23.57.11:18000/healthz)" = '{"status":"ok"}'
+cert_tmp=$(mktemp)
+cleanup() { rm -f "$cert_tmp"; }
+trap cleanup EXIT HUP INT TERM
+openssl s_client -connect 172.23.57.11:18000 -servername 10.1.2.57 </dev/null 2>/dev/null | openssl x509 -out "$cert_tmp"
+openssl x509 -in "$cert_tmp" -checkend 2592000 -noout
+cert_fingerprint=$(openssl x509 -in "$cert_tmp" -noout -fingerprint -sha256 | sed 's/^sha256 Fingerprint=//; s/://g')
+expected_fingerprint=$(tr -d '\r\n' < /etc/type-ai-platform/uat-nginx-cert.sha256)
+test -n "$expected_fingerprint"
+test "$cert_fingerprint" = "$expected_fingerprint"
+test "$(curl -kfsS --max-time 5 https://172.23.57.11:18000/healthz)" = '{"status":"ok"}'
 used_pct=$(df -P /srv/platform | awk 'NR == 2 { gsub("%", "", $5); print $5 }')
 if test "$used_pct" -gt 80; then
   echo "type-ai-platform storage headroom below 20 percent: used=${used_pct}%" >&2
@@ -982,27 +1015,29 @@ Database migration rollback 需要應用專屬且實際測過的程序；不要�
 - backend fstab、Docker config、deployment override、firewall／health units；
 - immutable Git revision；
 - `/srv/platform` named volumes 與持久資料；
-- 使用核准的受保護機制另行備份 `.secrets`。
+- UAT nginx certificate volume `type-ai-platform-uat_nginx-certs`、root-owned expected fingerprint file 與 remote `.env.uat`；
+- 使用核准的加密／受保護機制另行備份 `.secrets`。
 
 Restore drill 必須使用隔離 VMID／network，不得覆寫唯一正常的 VM 104 或 105。
 
 ## 15. 完成檢查表
 
-- [ ] `vmbr3` active，PVE host 沒有 private IP。
-- [ ] Edge 為 `10.1.2.57`／`172.23.57.1`，IP forwarding 與 nftables active。
-- [ ] Backend 為 `172.23.57.11`，8 vCPU／64 GiB，沒有 `10.1.2.x`。
-- [ ] Docker root、checkout、volumes、app data 均位於 `/srv/platform`。
-- [ ] `/srv/platform` 保留至少 20% free space。
-- [ ] `.env` 在本機與 checkout 都被 Git ignore，remote mode 為 `0600`。
-- [ ] Git remote 不含 credential，working tree clean，revision 已記錄。
-- [ ] PostgreSQL／ClickHouse migrations 成功。
-- [ ] Edge 私網 health 先通過，再啟用 8081。
-- [ ] 8081 HTTP 200；8082、8083 fail closed。
-- [ ] VPN client 無法直接存取 private backend。
-- [ ] Backend service port 只接受 Edge `.1`。
-- [ ] Edge／backend VM reboot 後自動恢復。
-- [ ] Health timers 與 rate-limited deny logs 可稽核且不含 secrets。
-- [ ] VM 109 template 基線未改變。
+- [x] `vmbr3` active，PVE host 沒有 private IP。
+- [x] Edge 為 `10.1.2.57`／`172.23.57.1`，IP forwarding 與 nftables active。
+- [x] Backend 為 `172.23.57.11`，8 vCPU／64 GiB，沒有 `10.1.2.x`。
+- [x] Docker root、checkout、volumes、app data 均位於 `/srv/platform`。
+- [x] `/srv/platform` 保留至少 20% free space。
+- [x] `.env.uat` 在 checkout 被 Git ignore，remote mode 為 `0600`；秘密值未進 Git 或 log。
+- [x] Git remote 不含 credential，working tree clean，UAT revision `25201dbf1ba3475ebe9a69356c551e6394937f26` 已記錄。
+- [x] PostgreSQL／ClickHouse migrations 成功。
+- [x] Edge 私網 UAT health 先通過，再保留 8081。
+- [x] `https://10.1.2.57:8081` frontend、health、docs、openapi 回 200；8082、8083 fail closed。
+- [x] VPN client 無法直接存取 private backend。
+- [x] Backend service port 只接受 Edge `.1`。
+- [x] Edge／backend VM reboot 後自動恢復（PVE host reboot 仍另行驗收）。
+- [x] Health timers 與 rate-limited deny logs 可稽核且不含 secrets。
+- [x] UAT self-signed certificate fingerprint／30-day expiry monitor 已加入 backend health timer；`curl -k` 僅限固定 UAT endpoint。
+- [x] VM 109 template 基線未改變。
 - [ ] Off-VPN、公網不可達、一般 VPN user 的 PVE denial、PVE host reboot 與隔離 restore drill 已另行驗證；未驗證項目不得標成成功。
 
 ## 16. 延伸閱讀

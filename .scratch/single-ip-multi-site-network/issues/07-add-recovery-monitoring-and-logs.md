@@ -10,10 +10,10 @@
 
 - [x] Edge VM 的 networking、IPv4 forwarding 與 nftables 均設為自動啟動，Type AI Platform containers 依正確依賴順序自動恢復。
 - [x] nftables 變更在 reload 前完成規則驗證；無效變更不會取代目前正常設定。
-- [ ] 監控從 VPN 使用者 seam 驗證 `10.1.2.57:8081`、每個仍在使用的其他 entrance port、正確 backend response 與未配置 port 拒絕。
+- [ ] 監控從 VPN 使用者 seam 持續驗證 `https://10.1.2.57:8081`、每個仍在使用的其他 entrance port、正確 backend response 與未配置 port 拒絕；目前已完成手動 seam，尚未配置獨立 VPN client 常駐監控。
 - [x] 監控 Edge VM 到 Type AI Platform 的私有連線、Docker container health 與必要 outbound NAT。
 - [x] 監控 `/srv` filesystem 使用率，並在接近保留百分之二十 headroom 前產生可行動告警。
-- [x] 監控不要求 DNS、certificate expiry 或 ACME renewal；若未來加入 TLS，必須另行擴充監控與驗收。
+- [x] 不要求 DNS 或 ACME renewal；目前 UAT 自簽 TLS 由 backend health timer 檢查 certificate 至少 30 天有效，並比對受保護的 SHA-256 fingerprint file。`curl -k` 只用於固定的 UAT 私有 endpoint，未來 production TLS 必須另行核准並使用可驗證信任鏈。
 - [x] nftables 必要拒絕紀錄與應用 health failure 可供稽核，且不記錄 `.env` value、token 或 authorization secret。
 - [x] 經 `[HUMAN ACTION]` 核准後重啟 Edge VM 與 Type AI Platform backend，所有必要服務無人工介入自動恢復。
 - [ ] 若 PVE host reboot 被核准，完成後 private bridge、兩台 VM、NAT 與所有 allocated ports 自動恢復；若未核准，明確記錄為 ticket 08 的待驗證項目而不假裝通過。
@@ -28,3 +28,9 @@
 - Edge 與 backend 都已實際 reboot。Edge 的 forwarding、nftables、DNAT／SNAT 與 health timer自動恢復；backend 的 Docker、三個 `unless-stopped` containers、source firewall、mounts 與 health timer 自動恢復。最終 VPN seam 的 8081 health 亦自動恢復。
 - PVE host reboot 未取得明確核准，因此未執行，保留給 ticket 08；不能把 VM-level reboot 結果當作 PVE host reboot 驗收。
 - 已從目前 VPN client 手動執行 entrance health、8082／8083 fail-closed、direct-private deny 與 PVE 管理路徑黑箱檢查；尚未建立常駐的 VPN-client-side monitor，也沒有在重啟後再次臨時開啟 8082，因此對應兩個 checklist 保持未勾選。
+
+### 2026-08-12 UAT recovery checks refreshed
+
+- UAT Compose 的六個 containers（frontend、backend、poller、Postgres、ClickHouse、nginx）均設定 `unless-stopped`；backend health script 已改為檢查六個 UAT container、自簽 HTTPS private health、certificate fingerprint 與 30-day expiry。
+- Edge health script 已改為 `curl -k` 驗證 `172.23.57.11:18000/healthz`；Edge／backend timers 均 enabled／active，立即執行結果為 success，拒絕 log 仍使用 rate-limited prefixes 且不輸出 secrets。
+- 目前 VPN seam 的 HTTPS frontend、health、docs、openapi、8082／8083 deny、direct-private deny 與 PVE management separation 已重新測試；PVE host reboot 與 VPN-client-side 常駐 monitor 仍需人工核准／獨立 client。

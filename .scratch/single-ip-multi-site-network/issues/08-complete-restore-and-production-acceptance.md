@@ -9,7 +9,7 @@
 **Human action required:** 還原演練、停機窗口、備份目的地存取、PVE host reboot 或 production cutover 若需要使用者核准，逐項標記 `[HUMAN ACTION]` 並等待。不得覆寫唯一 production instance 或刪除未驗證的備份。
 
 - [ ] 備份涵蓋重建 Edge VM 所需的網路、nftables port map 與服務設定，以及 Type AI Platform 的 deployment revision、Docker configuration 與 `/srv` 持久資料。
-- [ ] `.secrets` 與應用秘密使用核准的受保護備份機制，且不進入 Git、ticket 或一般 log；此設計不建立 DNS API token、ACME account key 或 Edge TLS private key。
+- [ ] `.secrets`、remote `.env.uat`、UAT nginx certificate volume 與 root-owned certificate fingerprint 使用核准的加密／受保護備份機制，且不進入 Git、ticket 或一般 log；此設計不建立 DNS API token 或 ACME account key。
 - [ ] 在不破壞唯一正常 instance 的前提下完成 Edge VM 與 Type AI Platform 的還原演練，並記錄實際復原時間與任何人工依賴。
 - [ ] 還原後新 VM 仍具備 8 vCPU、64 GiB RAM、私有 IP、正確 `/srv` placement 與至少百分之二十 storage headroom。
 - [ ] 還原後重新執行 `10.1.2.57:8081` Type AI Platform health、第二驗證 port、未配置 port 拒絕及 WebSocket 驗收。
@@ -28,4 +28,10 @@
 - `[HUMAN ACTION]` 尚需指定受保護的 VM／secret backup 目的地與隔離 restore VMID/network，並核准實際 restore drill；不得覆寫目前唯一正常的 VM 104 或 VM 105。
 - `[HUMAN ACTION]` PVE host reboot 尚未核准。VM-level reboot 已通過，但不能替代 host bridge／autostart 的 host-level 驗收。
 - `[HUMAN ACTION]` 需使用獨立 off-VPN client 驗證 8081 不公開，並使用不具 PVE 權限的一般 FortiClient user 驗證 FortiGate-level management separation。
-- Application revision `0f1816f4585668847c0c7e1f9fe348a8327d1dde` 尚未提供 production frontend image／manifests 或單一 8081 port 的同源 frontend/API routing。現況已發布並驗證 backend API、docs 與 health，但不能宣稱完整 UI 主要流程或 production-ready。
+- Application revision `25201dbf1ba3475ebe9a69356c551e6394937f26` 已提供並驗證 UAT frontend、nginx same-origin frontend/API routing、backend API、docs、health 與 dev-login smoke flow；仍不能宣稱 production-ready，因 production SSO、trusted TLS、PVE host reboot、off-VPN test 與 restore drill 尚未完成。
+
+### 2026-08-12 UAT cutover evidence
+
+- VM105 已由舊 dev Compose 切換至 UAT Compose；migration、六個 containers、`/srv/platform` headroom、Edge DNAT、HTTPS frontend/API seam 均已驗證。
+- UAT environment 與 Docker volumes 仍在 `/srv/platform`；`.env.uat` mode `0600`，秘密未進 Git、ticket、一般 log 或測試輸出。
+- 本 ticket 尚未把人工核准的 PVE host reboot、隔離 restore drill、獨立 off-VPN client 或一般 VPN user 的 FortiGate management separation 標成成功。
