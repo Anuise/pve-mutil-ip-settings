@@ -5,7 +5,7 @@
 | Role | PVE VM | Address | Published mapping |
 | --- | --- | --- | --- |
 | Edge | 104 `single-ip-edge` | `10.1.2.57/24`, `172.23.57.1/24` | TCP `8081` |
-| Type AI UAT | 105 `type-ai-platform-backend` | `172.23.57.11/24` | `8081 -> 172.23.57.11:18000 -> nginx:443` |
+| Type AI UAT | 105 `type-ai-platform-backend` | `172.23.57.11/24` | `8081 -> 172.23.57.11:443 -> nginx:443` |
 
 The current client URL is `https://10.1.2.57:8081`. It uses the UAT nginx self-signed certificate; the browser will show a certificate warning once. DNS, ACME, publicly trusted TLS, WireGuard and hostname routing are not part of this deployment.
 
@@ -34,7 +34,7 @@ Edge checks:
 sudo systemctl status nftables single-ip-edge-health.timer
 cat /proc/sys/net/ipv4/ip_forward
 sudo nft list ruleset
-curl -kfsS https://172.23.57.11:18000/healthz
+curl -kfsS https://172.23.57.11:443/healthz
 ```
 
 Backend checks, reached through the Edge SSH jump host:
@@ -48,12 +48,18 @@ docker inspect --format={{.State.Status}} \
   type-ai-platform-uat-poller-1 \
   type-ai-platform-uat-frontend-1 \
   type-ai-platform-uat-nginx-1
-iptables -C DOCKER-USER -i eth0 -s 172.23.57.1/32 -p tcp -m conntrack --ctorigdstport 18000 -j ACCEPT
-iptables -C DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 18000 -m limit --limit 5/second --limit-burst 10 -j LOG --log-prefix 'type-ai-drop '
-iptables -C DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 18000 -j DROP
-curl -kfsS https://172.23.57.11:18000/healthz
+iptables -C DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -C DOCKER-USER -i eth0 -s 172.23.57.1/32 -p tcp -m conntrack --ctorigdstport 443 -j ACCEPT
+iptables -C DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 443 -m limit --limit 5/second --limit-burst 10 -j LOG --log-prefix 'type-ai-drop '
+iptables -C DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 443 -j DROP
+curl -kfsS https://172.23.57.11:443/healthz
 df -hT /srv/platform
 ```
+
+The `ESTABLISHED,RELATED` rule must be evaluated before the service-port rules.
+Docker return traffic traverses `DOCKER-USER`; without this rule, outbound
+HTTPS from UAT containers can be dropped because its original destination port
+is also `443`.
 
 Health failures and rate-limited rejects are available through `journalctl`:
 
@@ -100,7 +106,7 @@ trap - EXIT
 ```
 
 The backend health timer extracts the certificate from
-`172.23.57.11:18000`, requires at least 30 days before expiry, and compares its
+`172.23.57.11:443`, requires at least 30 days before expiry, and compares its
 SHA-256 fingerprint with that file. `curl -k` is an explicit exception only for
 this fixed private UAT endpoint because the certificate is self-signed; it does
 not disable certificate validation for a future production endpoint.
