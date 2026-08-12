@@ -80,13 +80,19 @@ Initialize that file from the certificate in the named volume, using an atomic
 root-owned write, before enabling the timer:
 
 ```bash
+set -euo pipefail
 sudo install -d -o root -g root -m 0755 /etc/type-ai-platform
 tmp=$(sudo mktemp /etc/type-ai-platform/.uat-nginx-cert.sha256.XXXXXX)
 trap 'sudo rm -f "$tmp"' EXIT
-sudo openssl x509 \
+fingerprint=$(sudo openssl x509 \
   -in /srv/platform/docker/volumes/type-ai-platform-uat_nginx-certs/_data/server.crt \
   -noout -fingerprint -sha256 |
-  sed 's/^sha256 Fingerprint=//; s/://g' | sudo tee "$tmp" >/dev/null
+  sed 's/^sha256 Fingerprint=//; s/://g')
+if ! printf '%s\n' "$fingerprint" | grep -Eq '^[[:xdigit:]]{64}$'; then
+  echo 'certificate fingerprint validation failed' >&2
+  exit 1
+fi
+printf '%s\n' "$fingerprint" | sudo tee "$tmp" >/dev/null
 sudo chown root:root "$tmp"
 sudo chmod 0644 "$tmp"
 sudo mv -f "$tmp" /etc/type-ai-platform/uat-nginx-cert.sha256
