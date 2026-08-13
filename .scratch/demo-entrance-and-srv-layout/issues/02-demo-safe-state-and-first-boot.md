@@ -59,3 +59,8 @@
 審查後修正：`ciupgrade` 支援度改用 `qm_supports_option`。原本的 `qm set --help | grep -q` 在
 `pipefail` 下會被 `qm` 自己的非 0 結束碼誤判成「不支援」而無故停止；而傳進去的 `--` 又讓 grep
 永遠命中，使這道守衛形同虛設。兩種錯法都有測試。
+
+實機回報：stage 1 在真實 PVE 上被 ciupgrade 守衛擋下。PVE 的 `qm set --help` 把選項印成
+單破折號（`-ciupgrade <boolean>`），呼叫時卻是雙破折號，只比對雙破折號會誤判成「不支援」。
+改成兩種都認，並在真的找不到時印出 `pveversion` 與說明中所有 upgrade 相關選項，讓下一次
+執行能分辨「偵測寫錯」與「PVE 版本真的太舊」。

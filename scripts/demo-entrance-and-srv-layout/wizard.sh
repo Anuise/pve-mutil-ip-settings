@@ -151,13 +151,15 @@ qmcfg() { qm config "$1" | sed -n "s/^$2: //p"; }
 # qmstatus VMID — running / stopped。
 qmstatus() { qm status "$1" | sed -n 's/^status: //p'; }
 
-# qm_supports_option OPTION — `qm set` 是否支援某個選項。
-# 先把說明抓進變數再比對：pipefail 下 `qm set --help | grep` 會因為 qm 自己的
-# 非 0 結束碼而誤判成「不支援」。
+# qm_set_help — `qm set` 的說明文字。永遠回傳 0：PVE 的 help 會以非 0 結束，
+# pipefail 下直接 `qm set --help | grep` 會把它誤判成「選項不存在」。
+qm_set_help() { qm set --help 2>&1 || true; }
+
+# qm_supports_option NAME — `qm set` 是否支援某個選項。NAME 不帶破折號：
+# PVE 的說明把選項印成單破折號（`-ciupgrade <boolean>`），呼叫時卻是雙破折號，
+# 只比對其中一種會誤判。
 qm_supports_option() {
-  local help_text
-  help_text=$(qm set --help 2>&1 || true)
-  printf '%s' "$help_text" | grep -q -- "$1"
+  qm_set_help | grep -Eq -- "(^|[[:space:]])-{1,2}$1([[:space:]]|=|,|\$)"
 }
 
 # list_snapshots VMID — 逗號分隔的快照名稱，不含 PVE 的 `current` 偽節點。

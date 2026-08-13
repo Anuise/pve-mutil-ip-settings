@@ -46,9 +46,19 @@ host_ip_on_bridge=$(ip -4 -o addr show "$PRIVATE_BRIDGE" | wc -l)
 readback "PVE host 在 ${PRIVATE_BRIDGE} 上的 IP 數" "0" "$host_ip_on_bridge"
 
 # ciupgrade 需要 PVE 8.2 以上。
-qm_supports_option '--ciupgrade' ||
-  abort "此 PVE 版本的 qm set 沒有 --ciupgrade；需 PVE 8.2 以上，否則無法在重置前關閉自動升級"
-ok "qm set 支援 --ciupgrade"
+if ! qm_supports_option ciupgrade; then
+  warn "qm set 的說明中找不到 ciupgrade。診斷資訊："
+  pveversion 2>&1 | sed 's/^/    PVE: /'
+  upgrade_opts=$(qm_set_help | grep -i upgrade || true)
+  if [[ -n "$upgrade_opts" ]]; then
+    say "    qm set 說明中與 upgrade 相關的選項："
+    printf '%s\n' "$upgrade_opts" | sed 's/^/      /'
+  else
+    say "    （說明中沒有任何 upgrade 相關選項）"
+  fi
+  abort "此 PVE 版本的 qm set 沒有 ciupgrade；需 PVE 8.2 以上，否則無法在重置前關閉自動升級"
+fi
+ok "qm set 支援 ciupgrade"
 
 # ── 2 ─────────────────────────────────────────────────────────────────────
 stage "確認 Demo 目前沒有任何快照"
