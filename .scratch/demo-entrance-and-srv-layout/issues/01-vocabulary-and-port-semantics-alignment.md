@@ -14,9 +14,9 @@ repo 端：既有 spec 中把 `10.1.2.57:8082` 描述為臨時驗收 port 的段
 
 **Status:** ready-for-agent
 
-- [ ] PVE 上 VM 105 顯示名稱為 `type-ai-platform-uat`
-- [ ] VM 105 的電源狀態、網路設定與磁碟在改名前後一致
-- [ ] UAT 的 `10.1.2.57:8081` 在改名前後都回應正常
+- [x] PVE 上 VM 105 顯示名稱為 `type-ai-platform-uat`
+- [x] VM 105 的電源狀態、網路設定與磁碟在改名前後一致
+- [x] UAT 的 `10.1.2.57:8081` 在改名前後都回應正常
 - [x] 既有 spec 不再宣稱 `8082` 是臨時／可拋棄的驗收 port，並引用 ADR-0001
 - [x] runbook 配置表使用新機器名稱
 - [x] repo 文件中不再以 backend 指稱私有 guest 或 UAT 環境（應用程式自身的 backend 容器名稱除外）
@@ -36,6 +36,17 @@ repo 端完成。hypervisor 端的改名交付為 `scripts/demo-entrance-and-srv
 - `docs/research/`：只改指涉本部署私有 guest 的用法（含中文的「後端」）。作為 reverse proxy
   upstream 的一般術語（RFC 9110/6066 討論、Nginx `proxy_pass` 說明）保留原樣，那不是指本專案的機器。
 - `.scratch/` 下的既有 issue 檔屬歷史紀錄，除 spec 的 `8082` 語意修正外未改寫。
+
+hypervisor 端驗收（2026-08-13，PVE web UI 直接查核）：
+
+- VM 105 標題列與 Datacenter 清單皆顯示 `105 (type-ai-platform-uat)`。
+- 電源狀態一致：uptime 2 天 6 小時 43 分，橫跨今天的改名，代表全程沒有重啟。
+  網路一致：IP 仍是 `172.23.57.11`。磁碟一致：bootdisk 100.00 GiB。
+  「改名前後」的完整 config 逐項比對由腳本在執行當下做（排除 `name:` 後 diff）；
+  事後只能查核結果狀態，這裡記錄的是後者。
+- `10.1.2.57:8081` 有服務在聽：純 HTTP 打過去回 `400 The plain HTTP request was sent to
+  HTTPS port`，Server 標頭 `nginx/1.27.5`。走 HTTPS 則是自簽憑證的瀏覽器攔截頁。
+  回應本身即證明 Edge 的 DNAT 與 UAT 的服務都還在。
 
 `8082` 的語意在 spec、`docs/research/` 的 implementation decision 註記，以及 tutorial 第 11 節
 都已改正並指向 ADR-0001。tutorial 第 10、13 節仍留著「8082 fail closed」，那是 UAT 部署當時的

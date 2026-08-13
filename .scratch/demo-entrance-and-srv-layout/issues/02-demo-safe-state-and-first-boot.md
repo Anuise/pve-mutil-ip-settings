@@ -77,6 +77,21 @@ guest agent 可回應由票 04 的 `qm agent ping` 直接證實。
 唯一推不到的是 stage 10 的 `verify_uat_entrance`——它在 `qm start` **之後**，Demo running
 無法回推它跑過。使用者確認腳本跑到「票 02 完成」那行，據此補勾，全票通過。
 
+事後在 PVE web UI 直接查核（2026-08-13），上述推論全部改為實見：
+
+| 驗收項 | UI 上的值 |
+|---|---|
+| 快照為停機狀態、不含記憶體映像 | Snapshots：`pre-demo-entrance-20260813`，**RAM 欄為 No**，2026-08-13 14:23:36 |
+| 網卡在 private bridge | Hardware net0：`virtio=BC:24:11:D5:0E:0E,bridge=vmbr3,firewall=1` |
+| Cloud-Init 位址 | Cloud-Init：`ip=172.23.57.12/24,gw=172.23.57.1` |
+| 8 vCPU、64 GiB、ballooning 停用 | Hardware：`64.00 GiB [balloon=0]`、`8 (1 sockets, 8 cores)` |
+| 自動套件升級已關閉 | Cloud-Init：Upgrade packages **No** |
+| guest agent 可回應 | Options：QEMU Guest Agent **Enabled**；Summary 顯示 IP `172.23.57.12` |
+| 未開啟開機自啟 | Options：Start at boot **No** |
+| UAT `10.1.2.57:8081` 正常 | nginx/1.27.5 回應（詳見票 01） |
+
+net0 那行也證實改寫只動了 `bridge=`：MAC 與 `firewall=1` 都原樣保留。
+
 改法有兩層。`qm_set_options` 從 `qm help set --verbose` 取清單，問不到時輸出空字串；
 前置檢查因此能分辨「確定沒有 ciupgrade」與「問不到清單」，後者只示警不停止。決定性的
 檢查本來就是 stage 4 實際 `qm set --ciupgrade 0` 之後的讀回 —— 前置檢查只是提早示警，

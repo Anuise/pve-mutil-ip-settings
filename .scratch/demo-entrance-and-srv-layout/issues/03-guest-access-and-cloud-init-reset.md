@@ -65,3 +65,14 @@ xfs、已用 17.9G，`/etc/fstab` 的 `UUID=238cc650…` 那行也在。
 
 其中 dpkg SHA-256 那項是強驗證：stage 9 的 `readback` 比對重置前後 `dpkg-query -W` 清單的
 雜湊，不符即停止。腳本跑完等同雜湊相符，「未升級任何套件」不是承諾而是讀回結果。
+
+事後在 PVE web UI 直接查核（2026-08-13）：
+
+- Cloud-Init 頁的 **Password 欄為 `none`**——「過程中未建立任何新憑證」由 UI 實見，
+  不再只靠腳本 stage 11 的斷言。SSH public key 欄為 `ci-template-shared`。
+- Cloud-Init 的 IP Config (net0) 是 `ip=172.23.57.12/24,gw=172.23.57.1`；VM 103 的
+  Summary 頁 IPs 欄顯示 `172.23.57.12`——後者是 guest agent 回報的 guest **內部**狀態，
+  等同從內部確認位址已生效。
+- Upgrade packages 欄為 **No**，與「未升級任何套件」相互佐證。
+- Hardware 的三顆資料碟 100G／200G／500G，對得上票 04 報告裡的 `sda`／`sdb`／`sdc`，
+  大資料卷 `/data/model-cache`（`sdc1`，500G）確實還在。
