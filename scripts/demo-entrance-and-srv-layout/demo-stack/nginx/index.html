@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Type AI Platform — Demo entrance</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 4rem auto; padding: 0 1.5rem;
+         line-height: 1.7; color: #1c1c1c; background: #fafafa; }
+  code { background: #eee; padding: 0.1rem 0.35rem; border-radius: 3px; }
+  .env { font-size: 0.85rem; letter-spacing: 0.08em; text-transform: uppercase; color: #a33; }
+</style>
+</head>
+<body>
+  <p class="env">Demo</p>
+  <h1>Type AI Platform — Demo entrance</h1>
+  <p>
+    這個位址是 Demo 環境的 entrance port（<code>10.1.2.57:8082</code>），
+    由 Demo 的 nginx 終結 TLS。UAT 在同一個位址的 <code>10.1.2.57:8081</code>。
+  </p>
+  <p>
+    <strong>Demo 應用本體尚未部署。</strong>
+    本端點的用途是證明入口可達、TLS 正常、且回應可與 UAT 區分。
+    部署應用本體（images、secrets、資料庫 migration、Keycloak realm）
+    是另一份 spec 的工作，見 ADR-0003。
+  </p>
+  <p>健康檢查：<code>/healthz</code></p>
+</body>
+</html>

@@ -1,0 +1,40 @@
+# Demo stack — 只負責 172.23.57.12:443 這個端點。
+#
+# 本檔不部署 Type AI Platform Demo 應用本體（build images、secrets、資料庫
+# migration、Keycloak realm 匯入都不在內），見 ADR-0003。
+#
+# typeai-demo-pg 刻意不在這裡：那顆 66.65MB 匿名 volume 就是它的資料，
+# 交給 Compose 管會拿到一顆新的空 volume，等於刪掉資料庫。它以
+# `docker update --restart unless-stopped` 取得重開機恢復，不重建、不改網路。
+#
+# keycloak 的定義由 render-keycloak-compose.sh 依 `docker inspect` 產生為
+# compose.keycloak.yml —— 它的環境變數、啟動參數與所接的網路只有那顆現存容器
+# 知道，且它沿用原網路：nginx 這一側沒有 upstream，proxy 不需要跟它同網路。
+#
+#     docker compose -f compose.yml -f compose.keycloak.yml up -d
+
+name: typeai-demo
+
+services:
+  proxy:
+    container_name: typeai-demo-proxy
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "443:443"
+    volumes:
+      - nginx-certs:/etc/nginx/certs:ro
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/index.html:/usr/share/nginx/html/index.html:ro
+    networks:
+      - typeai-demo
+
+volumes:
+  # 自簽憑證放具名 volume：重建容器不會換憑證，刪掉 volume 才會 ——
+  # 換憑證等於要求使用者再做一次瀏覽器例外。比照 UAT。
+  nginx-certs:
+    name: typeai-demo_nginx-certs
+
+networks:
+  typeai-demo:
+    name: typeai-demo

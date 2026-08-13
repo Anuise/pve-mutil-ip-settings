@@ -216,6 +216,218 @@ r=$(run "printf 'UUID=abc /srv ext4 defaults 0 2\n' | redact_secrets")
 check "沒有 secret 的行原樣輸出" "0|UUID=abc /srv ext4 defaults 0 2" "$r"
 
 echo
+echo "fstab 掛載點改寫（票 06）"
+
+FSTAB_SAMPLE='# <file system> <mount point>   <type>  <options>       <dump>  <pass>
+# /var/lib/docker was on /dev/vg_data/lv_docker during curtin installation
+/dev/disk/by-id/dm-uuid-LVM-AAA /var/lib/docker ext4 defaults 0 1
+# /srv was on /dev/vg_data/lv_srv during curtin installation
+/dev/disk/by-id/dm-uuid-LVM-BBB /srv ext4 defaults 0 1
+/dev/disk/by-id/dm-uuid-LVM-CCC /var ext4 defaults,nodev,nosuid 0 1
+/swap.img	none	swap	sw	0	0'
+
+lib_run() { printf '%s\n' "${2-}" | bash -c "source '$LIB'; $1"; }
+
+r=$(lib_run 'fstab_set_mountpoint /var/lib/docker /srv/platform' "$FSTAB_SAMPLE")
+check_contains "掛載點改為 /srv/platform" \
+  "/dev/disk/by-id/dm-uuid-LVM-AAA /srv/platform ext4 defaults 0 1" "$r"
+check_lacks "設定行不再指向舊掛載點" "LVM-AAA /var/lib/docker" "$r"
+check_contains "註解原樣保留" "# /var/lib/docker was on" "$r"
+check_contains "/srv 那一行不動" "LVM-BBB /srv ext4 defaults 0 1" "$r"
+# 掛載選項照 ADR-0002 維持 defaults：Docker 需要在 data-root 建裝置節點與 setuid 檔。
+check_lacks "沒有把 /var 的 nodev,nosuid 帶到新掛載點" "/srv/platform ext4 defaults,nodev" "$r"
+check_contains "非掛載行原樣保留" "/swap.img" "$r"
+
+r=$(printf 'x /home ext4 defaults 0 1\n' |
+  bash -c "source '$LIB'; fstab_set_mountpoint /var/lib/docker /srv/platform"; echo "rc=$?")
+check_contains "找不到該掛載點時回傳 1" "rc=1" "$r"
+
+# 兩行同掛載點代表 fstab 已被改過或有殘留，改寫哪一行都是猜；必須停止。
+r=$(printf 'a /var/lib/docker ext4 defaults 0 1\nb /var/lib/docker ext4 defaults 0 1\n' |
+  bash -c "source '$LIB'; fstab_set_mountpoint /var/lib/docker /srv/platform" 2>/dev/null; echo "rc=$?")
+check_contains "同一掛載點超過一行時回傳 2" "rc=2" "$r"
+check_lacks "回傳 2 時不輸出半套 fstab" "/srv/platform" "$r"
+
+echo
+echo "daemon.json 合併 data-root（票 06）"
+
+DAEMON_JSON='{
+  "log-driver": "local",
+  "log-opts": {
+    "max-size": "100m",
+    "max-file": "60",
+    "compress": "true"
+  }
+}'
+
+r=$(lib_run 'daemon_json_with_data_root /srv/platform/docker' "$DAEMON_JSON")
+check_contains "寫入 data-root" '"data-root" : "/srv/platform/docker"' "$r"
+check_contains "既有 log-driver 保留" '"log-driver" : "local"' "$r"
+check_contains "既有 log-opts 保留" '"max-file"' "$r"
+
+r=$(lib_run 'daemon_json_with_data_root /srv/platform/docker' \
+  '{"data-root":"/var/lib/docker","log-driver":"local"}')
+check_lacks "既有 data-root 被覆寫而非重複" '/var/lib/docker' "$r"
+check_contains "覆寫後其餘鍵仍在" '"log-driver"' "$r"
+
+r=$(printf '' | bash -c "source '$LIB'; daemon_json_with_data_root /srv/platform/docker")
+check_contains "沒有 daemon.json 時產生只含 data-root 的物件" '"data-root"' "$r"
+
+r=$(printf 'not json\n' |
+  bash -c "source '$LIB'; daemon_json_with_data_root /srv/platform/docker" 2>/dev/null; echo "rc=$?")
+check_contains "無法解析時回傳 1 而不是寫出壞檔" "rc=1" "$r"
+
+echo
+echo "nftables entrance port 規則插入（票 08）"
+
+NFT_BASE='#!/usr/sbin/nft -f
+flush ruleset
+
+define ext_if = "eth0"
+define int_if = "eth1"
+define private_net = 172.23.57.0/24
+define vpn_nat_peer = 192.168.255.253/32
+
+table inet edge_filter {
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+        ct state invalid drop
+        ct state established,related accept
+        iifname $ext_if oifname $int_if ip saddr $vpn_nat_peer ip daddr 172.23.57.11 tcp dport 443 ct status dnat accept
+        iifname $int_if oifname $ext_if ip saddr $private_net ip daddr 10.1.2.0/24 drop
+        limit rate 5/second burst 10 packets counter log prefix "edge-forward-drop " flags all drop
+    }
+}
+
+table ip edge_nat {
+    chain prerouting {
+        type nat hook prerouting priority dstnat; policy accept;
+        iifname $ext_if ip saddr $vpn_nat_peer tcp dport 8081 dnat to 172.23.57.11:443
+    }
+
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        iifname $ext_if oifname $int_if ip saddr $vpn_nat_peer ip daddr 172.23.57.11 tcp dport 443 snat to 172.23.57.1
+        oifname $ext_if ip saddr $private_net masquerade
+    }
+}'
+
+NFT_NEW=$(lib_run 'nft_add_entrance_rules 8082 172.23.57.12 443' "$NFT_BASE")
+
+# chain_body NAME — 從 stdin 取出某條 chain 的內容。規則落錯 chain 是「設定載得進去
+# 但行為不對」的那一類錯誤，只 grep 全檔看不出來。
+chain_body() {
+  awk -v n="$1" '$0 ~ ("chain " n " \\{") { inside = 1; next }
+                 inside && /^[[:space:]]*}[[:space:]]*$/ { inside = 0 }
+                 inside'
+}
+
+fwd_body=$(printf '%s\n' "$NFT_NEW" | chain_body forward | tr '\n' ' ')
+pre_body=$(printf '%s\n' "$NFT_NEW" | chain_body prerouting | tr '\n' ' ')
+post_body=$(printf '%s\n' "$NFT_NEW" | chain_body postrouting | tr '\n' ' ')
+
+check_contains "forward 放行限定來源、目的與轉譯 port" \
+  'ip saddr $vpn_nat_peer ip daddr 172.23.57.12 tcp dport 443 ct status dnat accept' "$fwd_body"
+check_contains "DNAT 落在 prerouting" 'tcp dport 8082 dnat to 172.23.57.12:443' "$pre_body"
+check_contains "SNAT 落在 postrouting 且指向 Edge 私有位址" \
+  'ip daddr 172.23.57.12 tcp dport 443 snat to 172.23.57.1' "$post_body"
+
+check_lacks "DNAT 不會落到 forward" "dnat to" "$fwd_body"
+check_lacks "forward 放行不會落到 postrouting" "ct status dnat accept" "$post_body"
+
+# 新規則必須排在 log/drop 之前，否則永遠不會被評估到。
+fwd_new_line=$(printf '%s\n' "$NFT_NEW" | chain_body forward | grep -n '172.23.57.12' | cut -d: -f1)
+fwd_drop_line=$(printf '%s\n' "$NFT_NEW" | chain_body forward | grep -n 'edge-forward-drop' | cut -d: -f1)
+check "forward 新規則排在 log/drop 之前" "yes" \
+  "$( [[ -n "$fwd_new_line" && -n "$fwd_drop_line" && "$fwd_new_line" -lt "$fwd_drop_line" ]] && echo yes || echo no)"
+
+# 具體的 SNAT 必須排在通用 masquerade 之前。
+post_new_line=$(printf '%s\n' "$NFT_NEW" | chain_body postrouting |
+  grep -n 'ip daddr 172.23.57.12' | cut -d: -f1)
+post_masq_line=$(printf '%s\n' "$NFT_NEW" | chain_body postrouting | grep -n 'masquerade' | cut -d: -f1)
+check "SNAT 排在 masquerade 之前" "yes" \
+  "$( [[ -n "$post_new_line" && -n "$post_masq_line" && "$post_new_line" -lt "$post_masq_line" ]] && echo yes || echo no)"
+
+check_contains "既有 8081 的 DNAT 不動" "tcp dport 8081 dnat to 172.23.57.11:443" "$NFT_NEW"
+check_contains "既有 UAT 的 forward 放行不動" "ip daddr 172.23.57.11 tcp dport 443" "$NFT_NEW"
+check_contains "預設拒絕政策未放寬" "policy drop;" "$NFT_NEW"
+check_contains "縮排與既有規則一致" \
+  "        iifname \$ext_if ip saddr \$vpn_nat_peer tcp dport 8082 dnat to 172.23.57.12:443" "$NFT_NEW"
+
+# 重跑同一支腳本不該再插一次。
+r=$(printf '%s\n' "$NFT_NEW" |
+  bash -c "source '$LIB'; nft_add_entrance_rules 8082 172.23.57.12 443" 2>/dev/null; echo "rc=$?")
+check_contains "已存在同 port 的 DNAT 時回傳 2" "rc=2" "$r"
+
+# 已配給其他環境的 port：同樣以 2 停止，不會靜悄悄把 UAT 換掉。
+r=$(printf '%s\n' "$NFT_BASE" |
+  bash -c "source '$LIB'; nft_add_entrance_rules 8081 172.23.57.12 443" 2>/dev/null; echo "rc=$?")
+check_contains "port 已配給其他環境時回傳 2" "rc=2" "$r"
+
+r=$(printf 'table inet edge_filter {\n}\n' |
+  bash -c "source '$LIB'; nft_add_entrance_rules 8082 172.23.57.12 443" 2>/dev/null; echo "rc=$?")
+check_contains "找不到錨點時回傳 1" "rc=1" "$r"
+check_lacks "找不到錨點時不輸出半套設定" "8082" "$r"
+
+echo
+echo "Keycloak compose 產生（票 11）"
+
+# render-keycloak-compose.sh 把 docker inspect 抽出的欄位轉成 compose。
+# 唯一會改的東西是 realm import 的 bind mount source —— 改錯是「容器起得來、
+# realm 匯不到」的那種錯，所以這裡用假的 inspect 欄位把它釘住。
+RENDER="$(dirname "$LIB")/demo-stack/render-keycloak-compose.sh"
+FIELDS=$(mktemp -d)
+trap 'rm -rf "$FIELDS"' EXIT
+
+printf 'quay.io/keycloak/keycloak:26.0\n' > "$FIELDS/image"
+printf '/opt/keycloak/bin/kc.sh\n' > "$FIELDS/entrypoint"
+printf 'start-dev\n--import-realm\n' > "$FIELDS/cmd"
+printf 'bind\t/home/mobagel/type-ai-platform-demo/type-ai-platform-infra/base/keycloak/realm-typeai.json\t/opt/keycloak/data/import/realm-typeai.json\tfalse\n' \
+  > "$FIELDS/mounts"
+printf 'typeai-net\n' > "$FIELDS/networks"
+
+r=$(bash "$RENDER" "$FIELDS" /home/mobagel/type-ai-platform-demo \
+      /srv/platform/type-ai-platform-demo)
+
+check_contains "沿用原 image" "image: 'quay.io/keycloak/keycloak:26.0'" "$r"
+check_contains "沿用原容器名" "container_name: typeai-demo-kc" "$r"
+check_contains "重開機恢復靠 restart policy" "restart: unless-stopped" "$r"
+check_contains "env 走 env_file，不進 YAML" "env_file:" "$r"
+check_contains "沿用原 entrypoint" "'/opt/keycloak/bin/kc.sh'" "$r"
+check_contains "沿用原啟動參數" "- 'start-dev'" "$r"
+check_contains "realm bind mount 已改指新位置" \
+  "- '/srv/platform/type-ai-platform-demo/type-ai-platform-infra/base/keycloak/realm-typeai.json:/opt/keycloak/data/import/realm-typeai.json:ro'" \
+  "$r"
+check_lacks "不再引用 /home 的舊路徑" "/home/mobagel" "$r"
+# 沿用原網路：換網路會弄丟 keycloak 原本連得到的東西。
+check_contains "沿用容器原本的網路" "- typeai-net" "$r"
+check_contains "原網路以 external 引用，不由本 stack 建立" "external: true" "$r"
+# 不 publish port：Demo 只經 audited 的 entrance port 被存取。
+check_lacks "不發佈任何 port" "ports:" "$r"
+
+# 不在舊前綴底下的 bind mount 不該被改。
+printf 'bind\t/etc/localtime\t/etc/localtime\tfalse\n' > "$FIELDS/mounts"
+r=$(bash "$RENDER" "$FIELDS" /home/mobagel/type-ai-platform-demo \
+      /srv/platform/type-ai-platform-demo)
+check_contains "前綴以外的 bind mount 原樣保留" "- '/etc/localtime:/etc/localtime:ro'" "$r"
+
+printf 'bind\t/srv/data\t/data\ttrue\n' > "$FIELDS/mounts"
+r=$(bash "$RENDER" "$FIELDS" /home/mobagel/type-ai-platform-demo \
+      /srv/platform/type-ai-platform-demo)
+check_contains "可寫的 bind mount 不加 :ro" "- '/srv/data:/data'" "$r"
+
+# volume 型 mount 代表有資料要跟著走，交給人判斷而不是猜。
+printf 'volume\t/var/lib/docker/volumes/abc/_data\t/data\ttrue\n' > "$FIELDS/mounts"
+r=$(bash "$RENDER" "$FIELDS" /home/mobagel/type-ai-platform-demo \
+      /srv/platform/type-ai-platform-demo 2>/dev/null; echo "rc=$?")
+check_contains "遇到非 bind 的 mount 時停止" "rc=3" "$r"
+
+printf '' > "$FIELDS/image"
+printf 'bind\t/etc/localtime\t/etc/localtime\tfalse\n' > "$FIELDS/mounts"
+r=$(bash "$RENDER" "$FIELDS" /a /b 2>/dev/null; echo "rc=$?")
+check_contains "抽不到 image 時停止" "rc=1" "$r"
+
+echo
 if (( FAIL )); then
   printf '\n%d passed, %d FAILED\n\n' "$PASS" "$FAIL"
   exit 1

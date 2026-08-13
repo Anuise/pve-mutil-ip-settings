@@ -17,4 +17,5 @@ status: accepted
 - `10.1.2.57:8082` 的驗收語意是「可達、TLS、回應可與 UAT 區分」，**不是「Demo 應用可用」**。spec 的 user story 1 與票 08 的第一個驗收框都依此讀。
 - 使用者若期待 `8082` 打開就是 demo 應用，那是後續另一份 spec 的工作，不是本工作的缺陷。
 - Demo 的自簽憑證與 UAT 一樣需要瀏覽器例外一次；憑證放具名 volume，重建容器不會換憑證，刪掉 volume 才會（見 runbook 的 UAT certificate lifecycle）。
+- 三顆容器裡有兩顆會被重建：`typeai-demo-kc`（bind mount 的來源路徑要改指）與 `typeai-demo-proxy`（要以具名 volume 的憑證提供 `443` 的 TLS 並開出 `/healthz`，手動起的那顆兩者都沒有）。兩顆都沒有 volume，重建不會丟掉資料。
 - 既有三顆容器的定義在重建前必須先以 `docker inspect` 完整記錄並入 repo。其中 `typeai-demo-pg` 不得重建：那顆 66.65MB 的匿名 volume 是唯一且使用中的 volume，重建會產生新的空 volume，等於刪掉資料庫。重開機恢復以 `docker update --restart unless-stopped` 達成，不靠重建。

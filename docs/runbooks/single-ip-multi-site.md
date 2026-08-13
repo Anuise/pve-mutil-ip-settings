@@ -4,10 +4,13 @@
 
 | Role | PVE VM | Address | Published mapping |
 | --- | --- | --- | --- |
-| Edge | 104 `single-ip-edge` | `10.1.2.57/24`, `172.23.57.1/24` | TCP `8081` |
+| Edge | 104 `single-ip-edge` | `10.1.2.57/24`, `172.23.57.1/24` | TCP `8081`, `8082` |
 | Type AI UAT | 105 `type-ai-platform-uat` | `172.23.57.11/24` | `8081 -> 172.23.57.11:443 -> nginx:443` |
+| Type AI Demo | 103 `type-ai-platform-demo` | `172.23.57.12/24` | `8082 -> 172.23.57.12:443 -> nginx:443` |
 
-The current client URL is `https://10.1.2.57:8081`. It uses the UAT nginx self-signed certificate; the browser will show a certificate warning once. DNS, ACME, publicly trusted TLS, WireGuard and hostname routing are not part of this deployment.
+The client URLs are `https://10.1.2.57:8081` for UAT and `https://10.1.2.57:8082` for Demo. Each uses its own nginx self-signed certificate; the browser will show a certificate warning once per environment. DNS, ACME, publicly trusted TLS, WireGuard and hostname routing are not part of this deployment.
+
+`8082` is a permanent entrance port, not a spare validation port; see ADR-0001. Reaching `8082` proves the Demo entrance is reachable and TLS-terminated and that its response is distinguishable from UAT's. It does not mean the Demo application is deployed — it is not; see ADR-0003.
 
 UAT is built from application revision `25201dbf1ba3475ebe9a69356c551e6394937f26`. Its `ENV=dev` fake SSO is for trusted-network testing only; do not place real personal data in this environment.
 
@@ -20,12 +23,15 @@ From an approved FortiClient session:
 ```powershell
 Test-NetConnection 10.1.2.57 -Port 8081
 curl.exe -kfsS https://10.1.2.57:8081/healthz
+Test-NetConnection 10.1.2.57 -Port 8082
+curl.exe -kfsS https://10.1.2.57:8082/healthz
 ```
 
-Expected health body:
+Expected health bodies, which must stay distinguishable:
 
 ```json
 {"status":"ok"}
+{"status":"ok","env":"demo"}
 ```
 
 Edge checks:
@@ -35,6 +41,7 @@ sudo systemctl status nftables single-ip-edge-health.timer
 cat /proc/sys/net/ipv4/ip_forward
 sudo nft list ruleset
 curl -kfsS https://172.23.57.11:443/healthz
+curl -kfsS https://172.23.57.12:443/healthz
 ```
 
 UAT private guest checks, reached through the Edge SSH jump host:
@@ -71,6 +78,25 @@ journalctl -k -g type-ai-drop
 ```
 
 These checks must not print `.env`, tokens or authorization headers.
+
+Demo private guest checks, reached through the Edge SSH jump host:
+
+```bash
+systemctl status docker
+docker inspect --format='{{.Name}} {{.State.Status}} {{.HostConfig.RestartPolicy.Name}}' \
+  typeai-demo-proxy typeai-demo-kc typeai-demo-pg
+curl -kfsS https://172.23.57.12:443/healthz
+findmnt /srv/platform
+docker info --format '{{.DockerRootDir}}'
+df -hT /srv/platform
+```
+
+All three containers must report `running` and `unless-stopped`. `typeai-demo-pg`
+must never be recreated: its single anonymous volume holds the database, and a
+recreated container is given a new empty one. Demo has no `DOCKER-USER` ruleset
+of its own; unlike UAT it is not reachable from anything but the Edge, and the
+spec does not require one. The stack definition is tracked at
+`scripts/demo-entrance-and-srv-layout/demo-stack/`.
 
 ### UAT certificate lifecycle
 
@@ -192,14 +218,15 @@ For a failed application update, restore the previously recorded immutable Git r
 
 Backups must include:
 
-- VM 104 and VM 105 PVE configuration and disks;
+- VM 103, VM 104 and VM 105 PVE configuration and disks;
 - Edge `/etc/nftables.conf`, `/etc/sysctl.d/99-zz-single-ip-edge.conf`, health script and systemd units;
 - UAT `/etc/fstab`, `/etc/docker/daemon.json`, deployment override, firewall and health scripts/units;
 - the deployed immutable Git revision;
 - `/srv/platform` Docker volumes and persistent application data.
 
-The ignored `.secrets` hierarchy, the remote `.env.uat`, the UAT nginx
-certificate volume and the root-owned fingerprint file require a separately
+The ignored `.secrets` hierarchy, the remote `.env.uat`, the UAT and Demo nginx
+certificate volumes, their root-owned fingerprint files and Demo's
+`/srv/platform/type-ai-platform-demo/deploy/keycloak.env` require a separately
 approved encrypted/protected backup. They must not be copied into Git, tickets,
 ordinary logs or an unencrypted VM backup export. This design has no DNS API
 token or ACME account key.

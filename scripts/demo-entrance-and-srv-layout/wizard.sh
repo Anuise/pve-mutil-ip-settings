@@ -20,15 +20,38 @@ UAT_VMID=105
 UAT_OLD_NAME="type-ai-platform-backend"
 UAT_NEW_NAME="type-ai-platform-uat"
 
+PVE_HOST_IP="10.1.2.50"
+MGMT_ENDPOINT="${PVE_HOST_IP}:8006"
+
 PRIVATE_BRIDGE="vmbr3"
 DEMO_IP="172.23.57.12"
 EDGE_PRIVATE_IP="172.23.57.1"
 EDGE_EXTERNAL_IP="10.1.2.57"
 UAT_ENTRANCE_PORT=8081
+UAT_IP="172.23.57.11"
+DEMO_ENTRANCE_PORT=8082
+DEMO_SERVICE_PORT=443
 
 DEMO_MEMORY=65536
 DEMO_CORES=8
 HOME_DIR="/home/mobagel"
+
+PLATFORM_ROOT="/srv/platform"
+DOCKER_OLD_MOUNT="/var/lib/docker"
+CHECKOUT_NAME="type-ai-platform-demo"
+MIN_FREE_PCT=20
+EDGE_NFT_CONF="/etc/nftables.conf"
+
+# 未配置的 port，用來證明 fail closed。改這個值時不必動任何腳本。
+UNALLOCATED_PORT=8099
+
+DEMO_PROXY="typeai-demo-proxy"
+DEMO_KC="typeai-demo-kc"
+DEMO_PG="typeai-demo-pg"
+DEMO_STACK_CONTAINERS=("$DEMO_PROXY" "$DEMO_KC" "$DEMO_PG")
+
+# 票 05 明列不搬也不刪的東西。票 07 驗證它們沒被帶走，票 10 驗證它們沒被刪掉。
+KEEP_IN_HOME=(.venvs .claude .vscode-server .cache .local .npm rfp-workspace)
 
 TOTAL_STAGES=0
 _STAGE_INDEX=0
@@ -133,6 +156,67 @@ readback_contains() {
     printf '  %s    actual:              %s%s\n' "$DIM" "$haystack" "$RESET" >&2
     abort "讀回結果與預期不符"
   fi
+}
+
+# ── 設定檔改寫（純文字，stdin → stdout）──────────────────────────────────
+# 這三個都是「寫錯了也不會當場爆炸」的改寫：壞掉的 fstab 要等下次開機才發作，
+# 壞掉的 daemon.json 會讓 Docker 用回舊 data-root，規則插錯 chain 則是設定載得
+# 進去但行為不對。因此它們與 guest／Edge 解耦，並在 wizard.test.sh 有測試。
+
+# fstab_set_mountpoint OLD NEW — 只改掛載點欄位，裝置、fstype、選項與 dump/pass
+# 原樣保留，註解不動。找不到該掛載點回傳 1；超過一行回傳 2（改哪一行都是猜）。
+fstab_set_mountpoint() {
+  awk -v old="$1" -v new="$2" '
+    { line[NR] = $0 }
+    !/^[[:space:]]*#/ && NF >= 2 && $2 == old { n++; $2 = new; line[NR] = $0 }
+    END {
+      if (n != 1) exit (n ? 2 : 1)
+      for (i = 1; i <= NR; i++) print line[i]
+    }'
+}
+
+# daemon_json_with_data_root PATH — 合併 data-root，其餘鍵原樣保留。
+# 輸入為空視為「還沒有 daemon.json」，產生只含 data-root 的物件；
+# 無法解析時回傳 1，讓呼叫端停止，而不是寫出一份壞掉的設定。
+daemon_json_with_data_root() {
+  perl -MJSON::PP -0777 -e '
+    my $root = shift @ARGV;
+    my $in = do { local $/; <STDIN> };
+    my $obj = {};
+    if ($in =~ /\S/) {
+      $obj = eval { decode_json($in) };
+      exit 1 unless ref $obj eq "HASH";
+    }
+    $obj->{"data-root"} = $root;
+    print JSON::PP->new->pretty->canonical->encode($obj);' "$1"
+}
+
+# nft_add_entrance_rules PORT GUEST_IP SERVICE_PORT — 依既有慣例一次加三條規則：
+# forward 放行、prerouting DNAT、postrouting SNAT，各插在同類規則的最後一條之後
+# （所以會排在 forward 的 log/drop 與 postrouting 的 masquerade 之前）。
+# PORT 已被任何 DNAT 佔用時回傳 2；三個錨點任一找不到時回傳 1。
+nft_add_entrance_rules() {
+  awk -v port="$1" -v ip="$2" -v sport="$3" -v edge="$EDGE_PRIVATE_IP" '
+    { line[NR] = $0 }
+    index($0, "tcp dport " port " dnat to") { taken = 1 }
+    /ct status dnat accept/ { fwd = NR }
+    / dnat to /             { pre = NR }
+    / snat to /             { post = NR }
+    END {
+      if (taken) exit 2
+      if (!fwd || !pre || !post) exit 1
+      rule[fwd]  = indent(line[fwd]) "iifname $ext_if oifname $int_if ip saddr $vpn_nat_peer" \
+                   " ip daddr " ip " tcp dport " sport " ct status dnat accept"
+      rule[pre]  = indent(line[pre]) "iifname $ext_if ip saddr $vpn_nat_peer" \
+                   " tcp dport " port " dnat to " ip ":" sport
+      rule[post] = indent(line[post]) "iifname $ext_if oifname $int_if ip saddr $vpn_nat_peer" \
+                   " ip daddr " ip " tcp dport " sport " snat to " edge
+      for (i = 1; i <= NR; i++) {
+        print line[i]
+        if (i in rule) print rule[i]
+      }
+    }
+    function indent(s) { match(s, /^[ \t]*/); return substr(s, 1, RLENGTH) }'
 }
 
 # ── PVE 存取 ──────────────────────────────────────────────────────────────
@@ -265,6 +349,38 @@ pull_guest_file() {
   fi
 }
 
+# guest_put_file VMID DEST [MODE] — 把 stdin 的內容寫進 guest 的 DEST。
+# 走 base64：內容會成為 `sh -c` 的一部分，直接內嵌會被引號與 `$` 改寫。
+# 內容過大時停止 —— argv 有長度上限，截斷後寫出的會是一份看似正常的壞檔。
+guest_put_file() {
+  local vmid="$1" dest="$2" mode="${3:-0644}" b64
+  b64=$(base64 -w0)
+  [[ ${#b64} -le 65536 ]] || abort "要寫入 ${dest} 的內容過大（${#b64} bytes），改用其他方式傳輸"
+  guest_exec_or_abort "$vmid" \
+    "umask 077; printf '%s' '${b64}' | base64 -d > '${dest}' && chmod ${mode} '${dest}'" \
+    "無法寫入 guest 的 ${dest}" >/dev/null
+  ok "已寫入 guest 的 ${dest}（mode ${mode}）"
+}
+
+# guest_free_pct VMID PATH — 該掛載點的剩餘空間百分比（整數）。
+guest_free_pct() {
+  guest_exec_or_abort "$1" "df -P '$2' | awk 'NR==2 {print 100 - \$5}'" \
+    "無法讀取 $2 的剩餘空間" | tr -d '\n'
+}
+
+# require_free_pct VMID PATH — 剩餘空間不足 MIN_FREE_PCT 時以 [HUMAN ACTION] 停止。
+# spec 的停止條款：不足時停下來，不是挪資料騰空間。
+require_free_pct() {
+  local pct
+  pct=$(guest_free_pct "$1" "$2")
+  if [[ "$pct" -lt "$MIN_FREE_PCT" ]]; then
+    warn "$2 剩餘 ${pct}%，低於要求的 ${MIN_FREE_PCT}%"
+    human_action "spec 的停止條款：剩餘空間不足時停止，不得為了騰空間而刪除資料。"
+    abort "$2 剩餘空間不足"
+  fi
+  ok "$2 剩餘 ${pct}%（要求至少 ${MIN_FREE_PCT}%）"
+}
+
 # wait_agent VMID SECONDS — 等 guest agent 回應。
 wait_agent() {
   local vmid="$1" deadline=$(( SECONDS + $2 ))
@@ -273,6 +389,31 @@ wait_agent() {
     sleep 5
   done
   return 1
+}
+
+# reboot_and_wait VMID [SECONDS] — 重新開機並等 guest agent 回來。
+# 先 sleep 再等：qm reboot 送出後 agent 還會回應一小段時間，馬上 ping 會誤判成
+# 「已經回來了」而讓後面的讀回讀到重開機前的狀態。
+reboot_and_wait() {
+  local vmid="$1" secs="${2:-600}"
+  qm reboot "$vmid"
+  sleep 20
+  wait_agent "$vmid" "$secs" ||
+    abort "VM ${vmid} 的 guest agent 在 $(( secs / 60 )) 分鐘內沒有回應；改用 PVE console 檢查"
+  readback "VM ${vmid} 電源狀態" "running" "$(qmstatus "$vmid")"
+}
+
+# wait_container_running VMID NAME [TRIES] — 等容器起來，印出最後看到的狀態。
+# 重開機後 Docker 依 restart policy 拉容器需要時間，一次就判定會誤報成失敗。
+wait_container_running() {
+  local vmid="$1" name="$2" tries="${3:-6}" status="" i
+  for (( i = 0; i < tries; i++ )); do
+    status=$(guest_exec "$vmid" "docker inspect -f '{{.State.Status}}' '${name}'" |
+      tr -d '\r\n' || true)
+    [[ "$status" == "running" ]] && break
+    sleep 10
+  done
+  printf '%s' "$status"
 }
 
 # verify_uat_entrance — UAT 入口未受影響。需要使用者的 VPN session，腳本無法代勞。
@@ -284,6 +425,19 @@ verify_uat_entrance() {
   say ""
   say '預期 TcpTestSucceeded=True，且 healthz 回 {"status":"ok"}。'
   gate "UAT 的 ${UAT_ENTRANCE_PORT} 仍正常回應？"
+}
+
+# verify_demo_entrance — Demo 入口可達且回應可與 UAT 區分。
+# 依 ADR-0003，這裡的「Demo 的回應」指 nginx 端點的 TLS 回應，不是 Demo 應用可用。
+verify_demo_entrance() {
+  human_action "從已連上核准 FortiClient VPN 的 Windows client 執行："
+  say ""
+  say "    Test-NetConnection ${EDGE_EXTERNAL_IP} -Port ${DEMO_ENTRANCE_PORT}"
+  say "    curl.exe -kfsS https://${EDGE_EXTERNAL_IP}:${DEMO_ENTRANCE_PORT}/healthz"
+  say "    curl.exe -kfsS https://${EDGE_EXTERNAL_IP}:${UAT_ENTRANCE_PORT}/healthz"
+  say ""
+  say '預期 8082 回 {"status":"ok","env":"demo"}，8081 回 {"status":"ok"}，兩者可區分。'
+  gate "${DEMO_ENTRANCE_PORT} 回應 Demo 且與 ${UAT_ENTRANCE_PORT} 的回應不同？"
 }
 
 finish() {
