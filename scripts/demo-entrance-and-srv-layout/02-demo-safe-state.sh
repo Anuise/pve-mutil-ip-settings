@@ -45,20 +45,23 @@ readback "${PRIVATE_BRIDGE} bridge-ports" "none" "${bridge_ports:-<unset>}"
 host_ip_on_bridge=$(ip -4 -o addr show "$PRIVATE_BRIDGE" | wc -l)
 readback "PVE host 在 ${PRIVATE_BRIDGE} 上的 IP 數" "0" "$host_ip_on_bridge"
 
-# ciupgrade 需要 PVE 8.2 以上。
-if ! qm_supports_option ciupgrade; then
-  warn "qm set 的說明中找不到 ciupgrade。診斷資訊："
+# ciupgrade 需要 PVE 8.2 以上。這只是提早示警；決定性的檢查是 stage 4 實際執行
+# qm set --ciupgrade 0 後的讀回。空清單代表問不到，不能當成「不支援」。
+set_options=$(qm_set_options)
+if [[ -z "$set_options" ]]; then
+  warn "無法從 qm 的說明取得選項清單，略過這項預檢。"
   pveversion 2>&1 | sed 's/^/    PVE: /'
-  upgrade_opts=$(qm_set_help | grep -i upgrade || true)
-  if [[ -n "$upgrade_opts" ]]; then
-    say "    qm set 說明中與 upgrade 相關的選項："
-    printf '%s\n' "$upgrade_opts" | sed 's/^/      /'
-  else
-    say "    （說明中沒有任何 upgrade 相關選項）"
-  fi
+  note "stage 4 會實際設定 ciupgrade 並讀回，那才是決定性的檢查。"
+elif ! printf '%s\n' "$set_options" | grep -qx ciupgrade; then
+  warn "qm set 的選項清單中沒有 ciupgrade。診斷資訊："
+  pveversion 2>&1 | sed 's/^/    PVE: /'
+  say "    共讀到 $(printf '%s\n' "$set_options" | wc -l) 個選項，其中與 ci 相關的："
+  printf '%s\n' "$set_options" | grep '^ci' | sed 's/^/      /' ||
+    say "      （沒有任何 ci* 選項）"
   abort "此 PVE 版本的 qm set 沒有 ciupgrade；需 PVE 8.2 以上，否則無法在重置前關閉自動升級"
+else
+  ok "qm set 支援 ciupgrade"
 fi
-ok "qm set 支援 ciupgrade"
 
 # ── 2 ─────────────────────────────────────────────────────────────────────
 stage "確認 Demo 目前沒有任何快照"

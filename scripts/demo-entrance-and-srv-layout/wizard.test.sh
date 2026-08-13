@@ -113,25 +113,34 @@ check "qmcfg 取出 net0" "0|virtio=BC:24:11:0A:0B:0C,bridge=vmbr0,firewall=1" "
 r=$(run "${QM_STUB} printf '[%s]' \"\$(qmcfg 103 balloon)\"")
 check "欄位不存在時輸出空字串" "0|[]" "$r"
 
-# PVE 的 `qm set --help` 會以非 0 結束；pipefail 下直接 `qm … | grep -q` 會把
-# 「支援」誤判成「不支援」，於是票 02 在前置檢查就無故停止。
-r=$(run "qm() { printf ' -ciupgrade <boolean>\n'; return 255; }; qm_supports_option ciupgrade && echo SUPPORTED")
-check_contains "qm 以非 0 結束仍能判定支援" "SUPPORTED" "$r"
+# PVE 9 的 `qm set --help` 只印 USAGE 摘要，選項清單要問 `qm help set --verbose`；
+# 而 PVE 的 help 又會以非 0 結束，pipefail 下直接 `qm … | grep -q` 會誤判。
+# 兩者任一沒處理好，票 02 都會在前置檢查無故停止。
+PVE9_QM='qm() {
+  if [ "$1" = help ]; then printf "  -ciupgrade  <boolean>   (default=1)\n  -name       <string>\n"; return 255; fi
+  printf "USAGE: qm set <vmid> [OPTIONS]\n"; return 255;
+};'
 
-# PVE 的說明把選項印成單破折號，呼叫時卻是雙破折號。兩種都要認得，
-# 否則守衛會在支援 ciupgrade 的機器上把票 02 擋在前置檢查。
-r=$(run "qm() { printf '  -ciupgrade  <boolean>   (default=1)\n'; }; qm_supports_option ciupgrade && echo SUPPORTED")
-check_contains "說明用單破折號時判定支援" "SUPPORTED" "$r"
+r=$(run "${PVE9_QM} qm_supports_option ciupgrade && echo SUPPORTED")
+check_contains "PVE 9：選項只在 qm help set --verbose 裡且 qm 回非 0" "SUPPORTED" "$r"
 
 r=$(run "qm() { printf '  --ciupgrade <boolean>\n'; }; qm_supports_option ciupgrade && echo SUPPORTED")
 check_contains "說明用雙破折號時判定支援" "SUPPORTED" "$r"
 
+r=$(run "${PVE9_QM} qm_set_options | paste -sd, -")
+check "選項清單去掉破折號並排序" "0|ciupgrade,name" "$r"
+
 r=$(run "qm() { printf ' -name <string>\n -cipassword <password>\n'; return 255; }; qm_supports_option ciupgrade || echo UNSUPPORTED")
 check_contains "選項不存在時判定不支援" "UNSUPPORTED" "$r"
 
-# 舊版把 `--` 當成選項名傳進來，於是 grep 命中任何一行，守衛形同虛設。
+# 曾經把 `--` 當成選項名傳進來，於是 grep 命中任何一行，守衛形同虛設。
 r=$(run "qm() { printf ' -name <string>\n'; }; qm_supports_option ciupgrade || echo UNSUPPORTED")
 check_contains "不會因為說明裡有其他選項就誤判支援" "UNSUPPORTED" "$r"
+
+# 問不到清單時必須輸出空字串，讓呼叫端能分辨「確定沒有」與「問不到」——
+# 把「問不到」當成「不支援」，就是這次在 PVE 9.2.3 上停住的那個誤判。
+r=$(run "qm() { printf 'USAGE: qm set <vmid> [OPTIONS]\n'; return 255; }; printf '[%s]' \"\$(qm_set_options)\"")
+check "說明不列選項時輸出空清單" "0|[]" "$r"
 
 echo
 echo "net0 改寫保留 MAC 與其他旗標"

@@ -152,14 +152,27 @@ qmcfg() { qm config "$1" | sed -n "s/^$2: //p"; }
 qmstatus() { qm status "$1" | sed -n 's/^status: //p'; }
 
 # qm_set_help — `qm set` 的說明文字。永遠回傳 0：PVE 的 help 會以非 0 結束，
-# pipefail 下直接 `qm set --help | grep` 會把它誤判成「選項不存在」。
-qm_set_help() { qm set --help 2>&1 || true; }
+# pipefail 下直接 `qm … | grep` 會把它誤判成「選項不存在」。
+#
+# 先問 `qm help set --verbose`：PVE 9 的 `qm set --help` 只印 USAGE 摘要，一個
+# 選項名都沒有。兩個來源都收，才不會因為某一版的輸出格式而問不到。
+qm_set_help() {
+  qm help set --verbose 2>&1 || true
+  qm set --help 2>&1 || true
+}
 
-# qm_supports_option NAME — `qm set` 是否支援某個選項。NAME 不帶破折號：
-# PVE 的說明把選項印成單破折號（`-ciupgrade <boolean>`），呼叫時卻是雙破折號，
-# 只比對其中一種會誤判。
+# qm_set_options — `qm set` 支援的選項名，一行一個、不帶破折號。
+# 問不到時輸出空字串 —— 呼叫端必須把「空清單」當成無法判定，而不是「都不支援」。
+qm_set_options() {
+  qm_set_help |
+    grep -oE '^[[:space:]]*-{1,2}[a-z][a-z0-9_]*' |
+    sed -E 's/^[[:space:]]*-{1,2}//' |
+    sort -u
+}
+
+# qm_supports_option NAME — `qm set` 是否支援某個選項。NAME 不帶破折號。
 qm_supports_option() {
-  qm_set_help | grep -Eq -- "(^|[[:space:]])-{1,2}$1([[:space:]]|=|,|\$)"
+  qm_set_options | grep -qx -- "$1"
 }
 
 # list_snapshots VMID — 逗號分隔的快照名稱，不含 PVE 的 `current` 偽節點。
