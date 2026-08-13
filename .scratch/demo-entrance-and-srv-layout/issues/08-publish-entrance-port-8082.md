@@ -16,11 +16,13 @@
 
 不引入 DNS、hostname routing、反向代理、憑證機構或公開信任憑證。Demo 使用自簽憑證，瀏覽器可能需要一次例外。
 
-**Blocked by:** 07
+DNAT 的目的地在票 11 已經有人在聽。「回應 Demo」指的是那個 nginx 端點的 TLS 回應且可與 UAT 區分，不是「Demo 應用可用」—— 應用本體部署不在本 spec，見 ADR-0003。
+
+**Blocked by:** 11
 
 **Status:** ready-for-agent
 
-- [ ] `10.1.2.57:8082` 回應 Demo，且可與 UAT 的回應區分
+- [ ] `10.1.2.57:8082` 回應 Demo 的 nginx 端點，且可與 UAT 的回應區分
 - [ ] `10.1.2.57:8081` 仍回應 UAT，行為不變
 - [ ] HTTP 與 WebSocket 流量可透明通過 `8082`
 - [ ] 未配置的 port fail closed，且不會落到任何環境

@@ -20,13 +20,13 @@ spec 明文禁止在量測存在前決定這些。沒有這道閘，票 06 的�
 
 **Status:** ready-for-agent
 
-- [ ] 搬移目標 volume 已選定，且理由連結到票 04 的實際數字
-- [ ] 服務停機順序與各步驟 rollback 已寫明
-- [ ] 非空 Docker 環境的 remount 可行性已判斷，並說明與 UAT 空環境步驟的差異
-- [ ] 搬移後由什麼服務提供 `443` 已決定
-- [ ] 推估搬移後剩餘空間已計算；低於二成時本票停止並標記 `[HUMAN ACTION]`
-- [ ] 決策寫回 spec，不可逆者另立 ADR
-- [ ] 本票未改動 Demo 任何狀態
+- [x] 搬移目標 volume 已選定，且理由連結到票 04 的實際數字
+- [x] 服務停機順序與各步驟 rollback 已寫明
+- [x] 非空 Docker 環境的 remount 可行性已判斷，並說明與 UAT 空環境步驟的差異
+- [x] 搬移後由什麼服務提供 `443` 已決定
+- [x] 推估搬移後剩餘空間已計算；低於二成時本票停止並標記 `[HUMAN ACTION]`
+- [x] 決策寫回 spec，不可逆者另立 ADR
+- [x] 本票未改動 Demo 任何狀態
 
 ## Comments
 
@@ -105,3 +105,28 @@ compose 與 `.conf` 掃描零命中，也沒有 user-level systemd unit。路徑
 ### 容量餘裕
 
 `vg_data` 尚有 <50G 未配置，`vg_os` 只剩 <3.95G。要擴 `/srv` 有空間，要擴 `/home` 幾乎沒有。
+
+### 決策結論（2026-08-13，使用者已核可）
+
+決策全文寫回 spec；兩項另立 ADR。摘要：
+
+1. **`/srv/platform` 由 `lv_docker`（80G）改掛提供** —— ADR-0002。拒絕擴大 `lv_srv`（要多一次 LVM 擴充且 Docker 內容得跨檔案系統複製）與 `/data/model-cache`（model cache 專用）。
+2. **本工作不是搬移，是同一顆 LV 改掛載點。** 內容隨 LV 移動，收進 `/srv/platform/docker` 只是同檔案系統 rename，零複製、不需額外空間。票 06 的標題與敘述據此改寫，檔名改為 `06-remount-docker-lv-at-srv-platform.md`。
+3. **非空環境 remount 可行。** tutorial 的警告針對「有活的 workload 且內容需跨檔案系統複製」，Demo 兩者皆否（0 running、65M 隨 LV 走）。差異處理是搬移前後逐項比對 images／containers／volumes 清單與數量。
+4. **停機順序與逐步 rollback 已寫進 spec**，12 步，每步有具名反向動作。`docker.socket` 必須先於 daemon 停，否則 socket activation 會把 daemon 叫回來。票 02 的快照 `pre-demo-entrance-20260813` 只是最後手段 —— 它早於票 02／03，回退會連 private bridge 遷移與 Cloud-Init 重置一起退掉。
+5. **`443` 由 Demo stack 的 nginx 提供，定義入 repo；應用本體部署不在本 spec** —— ADR-0003。盤點揭露的不只是「沒有 listener」，是應用從未部署（沒有 frontend／backend image）。`8082` 的驗收語意因此是「可達、TLS、可與 UAT 區分」。為此新增票 11，票 08 的 `Blocked by` 由 07 改為 11。
+6. **搬移界線**：只搬 `type-ai-platform-demo` checkout 到 `/srv/platform/type-ai-platform-demo`（保留原目錄名，不與 UAT 的 `type-ai-platform` 同路徑），另建空的 `app-data`。`.venvs`、開發工具目錄、`rfp-workspace` 留在 `/home`。
+7. **不得重建 `typeai-demo-pg`** —— 那顆 66.65MB 匿名 volume 就是它的資料，重建會拿到新的空 volume。重啟策略用 `docker update --restart unless-stopped`。唯一必須重建的是 Keycloak（bind mount 來源路徑改變），因此票 07 的「引用舊路徑改指新位置」移交票 11。
+8. **二成門檻不觸發**：`/srv/platform` 搬完約用 0.76G／79G，剩 98%。`/home` 在票 10 刪掉來源後由 58% 降到約 50%。
+
+### 三項未能自行取得的 guest 內部事實
+
+PVE host 與 Demo 都不接受本機持有的 SSH key（`ci-template-key`、`id_rsa` 皆 `Permission denied (publickey,password)`），經瀏覽器呼叫 PVE API 執行 guest 指令也被工具層擋下，因此票 04 報告以外的 guest 內部細節在本票取不到。三項都預先決定好兩個分支，由票 11 開工前的唯讀補查解決：
+
+| 未知 | 有 → | 無 → |
+|---|---|---|
+| 三顆容器是 Compose 還是手動建的；checkout 內是否已有部署定義 | 沿用既有定義 | 以 `docker inspect` 產生並入 repo |
+| nginx 是否已有 TLS 設定與憑證 | 沿用並記錄 fingerprint（比照 UAT） | 照 UAT 模式產生自簽憑證放具名 volume |
+| Keycloak realm 狀態在 PostgreSQL 還是容器內 | 在 PostgreSQL：可安全重建 | 在容器內：先匯出 realm；匯不出則 `[HUMAN ACTION]` 停 |
+
+本票對 Demo 只做過一次失敗的 SSH 認證嘗試（key 不被接受），除 guest 的認證失敗日誌外未觸及任何狀態。
