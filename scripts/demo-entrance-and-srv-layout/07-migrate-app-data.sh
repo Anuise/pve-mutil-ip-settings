@@ -104,6 +104,10 @@ ok "複製完成（結束碼不算證據，下一步才是）"
 stage "逐檔 SHA-256 與屬性比對"
 mkdir -p "$HOST_STATE"
 
+# 掃全樹算 SHA-256 在數十萬個檔案上要跑很久，預設的 300 秒不夠。等不夠久的下場
+# 不是報錯，是 PVE 提早回傳、清單只寫到一半，而比對還會說「相符」。
+GUEST_EXEC_TIMEOUT=3600
+
 guest_exec_or_abort "$DEMO_VMID" "$(manifest "$SRC_DIR") > '${GUEST_STATE}/src-manifest.txt'" \
   "無法產生來源 manifest" >/dev/null
 guest_exec_or_abort "$DEMO_VMID" "$(manifest "$DST_DIR") > '${GUEST_STATE}/dst-manifest.txt'" \
@@ -118,12 +122,15 @@ note "只為了跑 diff，是把大量資料塞進 guest agent 那條窄通道�
 note "「相不相符」與不符的那幾行。完整清單留在 guest 的 ${GUEST_STATE}。"
 
 say ""
-say "$(guest_exec_or_abort "$DEMO_VMID" "
+# 不寫成 say "$(guest_exec_or_abort …)"：abort 在 command substitution 裡只殺得掉
+# subshell，say 拿到空字串照樣回 0，序列會印完「已停止」再繼續跑下去。
+counts=$(guest_exec_or_abort "$DEMO_VMID" "
 printf '檔案數：來源 %s，目標 %s\n' \
   \"\$(wc -l < '${GUEST_STATE}/src-sha256.txt')\" \"\$(wc -l < '${GUEST_STATE}/dst-sha256.txt')\"
 printf '項目數：來源 %s，目標 %s' \
   \"\$(wc -l < '${GUEST_STATE}/src-manifest.txt')\" \"\$(wc -l < '${GUEST_STATE}/dst-manifest.txt')\"
-" "無法清點來源與目標")"
+" "無法清點來源與目標")
+say "$counts"
 
 for kind in sha256 manifest; do
   case "$kind" in

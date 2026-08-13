@@ -44,6 +44,10 @@ readback "目標仍在" "yes" \
 stage "重新確認逐檔 SHA-256 全數相符"
 say "不看票 07 留下的舊紀錄，現在重算一次 —— 刪除是不可逆的。"
 
+# 與票 07 stage 4 同一個理由：掃全樹算 SHA-256 遠超過預設的 300 秒，而等不夠久
+# 的下場是清單只寫到一半、比對卻說相符 —— 在刪除前拿到這個結論最危險。
+GUEST_EXEC_TIMEOUT=3600
+
 guest_exec_or_abort "$DEMO_VMID" "
 set -e
 mkdir -p '${GUEST_STATE}'
@@ -58,8 +62,10 @@ note "guest agent 那條窄通道。完整清單留在 guest 的 ${GUEST_STATE}�
 
 DST_FILES=$(guest_exec_or_abort "$DEMO_VMID" "wc -l < '${GUEST_STATE}/dst-sha256.txt'" \
   "無法清點目標檔案數" | tr -d '\r\n')
-say "檔案數：來源 $(guest_exec_or_abort "$DEMO_VMID" \
-  "wc -l < '${GUEST_STATE}/src-sha256.txt'" "無法清點來源檔案數" | tr -d '\r\n')，目標 ${DST_FILES}"
+# 先取值再 say：abort 在 say 的 command substitution 裡只殺得掉 subshell。
+SRC_FILES=$(guest_exec_or_abort "$DEMO_VMID" "wc -l < '${GUEST_STATE}/src-sha256.txt'" \
+  "無法清點來源檔案數" | tr -d '\r\n')
+say "檔案數：來源 ${SRC_FILES}，目標 ${DST_FILES}"
 
 n=$(guest_diff "$DEMO_VMID" "${GUEST_STATE}/src-sha256.txt" "${GUEST_STATE}/dst-sha256.txt" \
   "${GUEST_STATE}/diff-sha256.txt")
@@ -112,8 +118,9 @@ gate "票 09 全數通過？"
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
 stage "刪除"
-say "只刪這一個目錄：${SRC_DIR}（$(guest_exec_or_abort "$DEMO_VMID" \
-  "du -sh '${SRC_DIR}' | cut -f1" "無法量測來源" | tr -d '\n')）"
+src_size=$(guest_exec_or_abort "$DEMO_VMID" "du -sh '${SRC_DIR}' | cut -f1" \
+  "無法量測來源" | tr -d '\n')
+say "只刪這一個目錄：${SRC_DIR}（${src_size}）"
 say ""
 say "不刪：家目錄本身，以及"
 printf '      %s\n' "${KEEP_IN_HOME[@]}"

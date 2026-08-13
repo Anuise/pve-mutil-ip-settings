@@ -88,6 +88,26 @@ check_contains "在 x=\$(…) 底下 abort 仍看得到訊息" "無法讀取" \
   "$(run_err 'f() { abort "無法讀取位址"; }; x=$(f); echo "$x"')"
 
 echo
+echo "guest_exec 分辨得出失敗的種類"
+# guest_exec_or_abort 依這些回傳碼給出不同的說明，所以它們是契約的一部分。
+# 最要緊的是 124：PVE 等到 --timeout 到期會回一份沒有 exitcode 的回應，把它
+# 當成 0 的話，「逾時、指令還在跑」會長得跟「成功且無輸出」一模一樣。
+ge() { # ge 'qm 的假回應' — 印出 "<exit>|<stdout>"
+  local out rc=0
+  out=$(bash -c "source '$LIB'; qm() { $1; }; guest_exec 103 cmd" 2>/dev/null) || rc=$?
+  printf '%s|%s' "$rc" "$out"
+}
+
+check "正常回應" "0|hi" "$(ge 'printf "{\"exitcode\":0,\"out-data\":\"hi\"}"')"
+check "guest 內的指令回非 0" "3|" "$(ge 'printf "{\"exitcode\":3}"')"
+check "逾時（回應沒有 exitcode）" "124|" "$(ge 'printf "{\"exited\":0}"')"
+check "qm guest exec 本身失敗" "125|" "$(ge 'echo boom >&2; exit 255')"
+check "回應不是 JSON" "126|" "$(ge 'printf "not json"')"
+check "回應是陣列不是物件" "126|" "$(ge 'printf "[1,2,3]"')"
+check_contains "逾時時 abort 講的是逾時" "還在 guest 內跑" \
+  "$(run_err 'qm() { printf "{\"exited\":0}"; }; guest_exec_or_abort 103 cmd "讀不到"')"
+
+echo
 echo "確認閘門"
 
 r=$(run 'gate "繼續？"; echo REACHED_NEXT_STEP' 'y

@@ -45,6 +45,10 @@ EDGE_NFT_CONF="/etc/nftables.conf"
 # 未配置的 port，用來證明 fail closed。改這個值時不必動任何腳本。
 UNALLOCATED_PORT=8099
 
+# guest agent 單一指令的等待上限（秒）。掃全樹算 SHA-256 這種動作要另外拉長，
+# 由該 stage 自己覆寫。
+GUEST_EXEC_TIMEOUT=300
+
 DEMO_PROXY="typeai-demo-proxy"
 DEMO_KC="typeai-demo-kc"
 DEMO_PG="typeai-demo-pg"
@@ -308,22 +312,52 @@ redact_secrets() {
 }
 
 # guest_exec VMID 'sh -c 的指令' — 經 guest agent 以 root 執行，印出 guest
-# stdout，回傳 guest 的 exit code。guest agent 不通時回傳 125，回應無法解析時 126。
+# stdout，回傳 guest 的 exit code。
+#
+# qm 自己的錯誤訊息一律轉印到 stderr。把它丟掉的話，「agent 沒回應」「指令逾時」
+# 「回應解不開」這三件完全不同的事，在操作者眼裡都只是同一句「指令失敗」，
+# 而修法各不相同。
+#
+# 特別回傳碼：
+#   124 = 回應裡沒有 exitcode。PVE 等到 --timeout 到期就是這樣回，指令其實還在
+#         guest 裡跑。舊版把它當 0，於是「逾時」長得跟「成功且無輸出」一模一樣。
+#   125 = qm guest exec 本身失敗（agent 不通、VM 沒開機、參數不對）。
+#   126 = 回應不是可解析的 JSON。
 guest_exec() {
-  local vmid="$1" cmd="$2" json
-  json=$(qm guest exec "$vmid" --timeout 300 -- /bin/sh -c "$cmd" 2>/dev/null) || return 125
+  local vmid="$1" cmd="$2" json err rc=0
+  err=$(mktemp)
+  if ! json=$(qm guest exec "$vmid" --timeout "$GUEST_EXEC_TIMEOUT" -- /bin/sh -c "$cmd" 2>"$err"); then
+    sed 's/^/      qm: /' "$err" >&2
+    rm -f "$err"
+    return 125
+  fi
+  # 逾時的警告是印在 stderr 而不是塞進 JSON 的，所以成功的路徑也要看這個檔。
+  [[ -s "$err" ]] && sed 's/^/      qm: /' "$err" >&2
+  rm -f "$err"
   printf '%s' "$json" | perl -MJSON::PP -0777 -ne '
-    my $r = eval { decode_json($_) } or exit 126;
+    my $r = eval { decode_json($_) };
+    unless (ref $r eq "HASH") { print STDERR "      回應不是可解析的 JSON\n"; exit 126 }
     print $r->{"out-data"} // "";
     print STDERR $r->{"err-data"} // "";
-    exit(($r->{"exitcode"} // 0) + 0);'
+    unless (defined $r->{"exitcode"}) {
+      print STDERR "      回應沒有 exitcode：指令在 guest 內還沒結束\n";
+      exit 124;
+    }
+    exit($r->{"exitcode"} + 0);' || rc=$?
+  return "$rc"
 }
 
 # guest_exec_or_abort VMID 'cmd' '失敗說明' — guest 指令失敗即停止整個序列。
 guest_exec_or_abort() {
-  local out
-  if ! out=$(guest_exec "$1" "$2"); then
-    abort "$3"
+  local out rc=0
+  out=$(guest_exec "$1" "$2") || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    case "$rc" in
+      124) abort "$3（等超過 ${GUEST_EXEC_TIMEOUT} 秒仍未結束；指令還在 guest 內跑）" ;;
+      125) abort "$3（qm guest exec 沒能送出，看上面那行 qm:）" ;;
+      126) abort "$3（qm guest exec 的回應解不開）" ;;
+      *)   abort "$3（guest 內的指令以 ${rc} 結束）" ;;
+    esac
   fi
   printf '%s' "$out"
 }
