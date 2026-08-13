@@ -113,31 +113,39 @@ guest_exec_or_abort "$DEMO_VMID" "$(checksums "$SRC_DIR") > '${GUEST_STATE}/src-
 guest_exec_or_abort "$DEMO_VMID" "$(checksums "$DST_DIR") > '${GUEST_STATE}/dst-sha256.txt'" \
   "無法計算目標 SHA-256" >/dev/null
 
-for f in src-manifest dst-manifest src-sha256 dst-sha256; do
-  pull_guest_file "$DEMO_VMID" "${GUEST_STATE}/${f}.txt" "${HOST_STATE}/${f}.txt"
-done
+note "比對在 guest 內做。manifest 與 checksum 有數萬行、數 MB，把它們搬回主機"
+note "只為了跑 diff，是把大量資料塞進 guest agent 那條窄通道；需要的答案只有"
+note "「相不相符」與不符的那幾行。完整清單留在 guest 的 ${GUEST_STATE}。"
 
 say ""
-say "檔案數：來源 $(wc -l < "${HOST_STATE}/src-sha256.txt")，目標 $(wc -l < "${HOST_STATE}/dst-sha256.txt")"
-say "項目數：來源 $(wc -l < "${HOST_STATE}/src-manifest.txt")，目標 $(wc -l < "${HOST_STATE}/dst-manifest.txt")"
+say "$(guest_exec_or_abort "$DEMO_VMID" "
+printf '檔案數：來源 %s，目標 %s\n' \
+  \"\$(wc -l < '${GUEST_STATE}/src-sha256.txt')\" \"\$(wc -l < '${GUEST_STATE}/dst-sha256.txt')\"
+printf '項目數：來源 %s，目標 %s' \
+  \"\$(wc -l < '${GUEST_STATE}/src-manifest.txt')\" \"\$(wc -l < '${GUEST_STATE}/dst-manifest.txt')\"
+" "無法清點來源與目標")"
 
-if diff -u "${HOST_STATE}/src-sha256.txt" "${HOST_STATE}/dst-sha256.txt" \
-     > "${HOST_STATE}/diff-sha256.txt"; then
-  ok "每一個檔案的來源與目標 SHA-256 相符"
-else
-  warn "SHA-256 比對不符（前 40 行）："
-  head -40 "${HOST_STATE}/diff-sha256.txt" | sed 's/^/    /'
-  abort "搬移不完整；來源仍在原處，刪掉 ${DST_DIR} 後重跑"
-fi
-
-if diff -u "${HOST_STATE}/src-manifest.txt" "${HOST_STATE}/dst-manifest.txt" \
-     > "${HOST_STATE}/diff-manifest.txt"; then
-  ok "權限、擁有者、型別與 symlink 目標逐項相符"
-else
-  warn "屬性比對不符（前 40 行）："
-  head -40 "${HOST_STATE}/diff-manifest.txt" | sed 's/^/    /'
-  abort "屬性未完整保留；刪掉 ${DST_DIR} 後重跑"
-fi
+for kind in sha256 manifest; do
+  case "$kind" in
+    sha256)   label="每一個檔案的來源與目標 SHA-256"; fail="搬移不完整" ;;
+    manifest) label="權限、擁有者、型別與 symlink 目標"; fail="屬性未完整保留" ;;
+  esac
+  n=$(guest_diff "$DEMO_VMID" \
+    "${GUEST_STATE}/src-${kind}.txt" "${GUEST_STATE}/dst-${kind}.txt" \
+    "${GUEST_STATE}/diff-${kind}.txt")
+  if [[ "$n" == "0" ]]; then
+    ok "${label}逐項相符"
+    : > "${HOST_STATE}/diff-${kind}.txt"
+  else
+    warn "${label}不符（共 ${n} 行差異，前 40 行）："
+    guest_exec "$DEMO_VMID" "head -40 '${GUEST_STATE}/diff-${kind}.txt'" |
+      sed 's/^/    /' || true
+    guest_exec "$DEMO_VMID" "head -200 '${GUEST_STATE}/diff-${kind}.txt'" \
+      > "${HOST_STATE}/diff-${kind}.txt" || true
+    abort "${fail}；來源仍在原處，刪掉 ${DST_DIR} 後重跑"
+  fi
+done
+ok "比對紀錄：guest 的 ${GUEST_STATE}，主機的 ${HOST_STATE}"
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
 stage "建立 ${PLATFORM_ROOT}/app-data"

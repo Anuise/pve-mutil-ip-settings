@@ -53,17 +53,24 @@ cd '${DST_DIR}' && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha25
   > '${GUEST_STATE}/dst-sha256.txt'
 " "重算 SHA-256 失敗" >/dev/null
 
-for f in src-sha256 dst-sha256; do
-  pull_guest_file "$DEMO_VMID" "${GUEST_STATE}/${f}.txt" "${HOST_STATE}/${f}.txt"
-done
-say "檔案數：來源 $(wc -l < "${HOST_STATE}/src-sha256.txt")，目標 $(wc -l < "${HOST_STATE}/dst-sha256.txt")"
+note "比對在 guest 內做：清單有數萬行，帶回主機只為了跑 diff 是把大量資料塞進"
+note "guest agent 那條窄通道。完整清單留在 guest 的 ${GUEST_STATE}。"
 
-if diff -u "${HOST_STATE}/src-sha256.txt" "${HOST_STATE}/dst-sha256.txt" \
-     > "${HOST_STATE}/diff-sha256.txt"; then
+DST_FILES=$(guest_exec_or_abort "$DEMO_VMID" "wc -l < '${GUEST_STATE}/dst-sha256.txt'" \
+  "無法清點目標檔案數" | tr -d '\r\n')
+say "檔案數：來源 $(guest_exec_or_abort "$DEMO_VMID" \
+  "wc -l < '${GUEST_STATE}/src-sha256.txt'" "無法清點來源檔案數" | tr -d '\r\n')，目標 ${DST_FILES}"
+
+n=$(guest_diff "$DEMO_VMID" "${GUEST_STATE}/src-sha256.txt" "${GUEST_STATE}/dst-sha256.txt" \
+  "${GUEST_STATE}/diff-sha256.txt")
+if [[ "$n" == "0" ]]; then
   ok "每一個檔案的來源與目標 SHA-256 相符"
+  : > "${HOST_STATE}/diff-sha256.txt"
 else
-  warn "比對不符（前 40 行）："
-  head -40 "${HOST_STATE}/diff-sha256.txt" | sed 's/^/    /'
+  warn "比對不符（共 ${n} 行差異，前 40 行）："
+  guest_exec "$DEMO_VMID" "head -40 '${GUEST_STATE}/diff-sha256.txt'" | sed 's/^/    /' || true
+  guest_exec "$DEMO_VMID" "head -200 '${GUEST_STATE}/diff-sha256.txt'" \
+    > "${HOST_STATE}/diff-sha256.txt" || true
   abort "比對不符，不刪除任何東西"
 fi
 
@@ -130,10 +137,9 @@ for d in "${KEEP_IN_HOME[@]}"; do
     "test -e '${HOME_DIR}/${d}' && echo yes || echo absent" "無法檢查 ${d}" | tr -d '\n')
   ok "${d}（${still}）未被刪除"
 done
-readback "目標仍完整" \
-  "$(wc -l < "${HOST_STATE}/dst-sha256.txt")" \
+readback "目標仍完整" "$DST_FILES" \
   "$(guest_exec_or_abort "$DEMO_VMID" "find '${DST_DIR}' -type f | wc -l" \
-     "無法清點目標" | tr -d '\n')"
+     "無法清點目標" | tr -d '\r\n')"
 
 # ── 6 ─────────────────────────────────────────────────────────────────────
 stage "刪除後兩個入口都正常"

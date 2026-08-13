@@ -339,14 +339,28 @@ guest_global_addrs() {
 # guest 上不存在會明講並留空檔；取回失敗（agent 出錯）則停止整個序列 ——
 # 靜默留空檔會讓後續的金鑰比對得出「沒有多餘金鑰」這個危險的錯誤結論。
 pull_guest_file() {
-  local vmid="$1" src="$2" dest="$3"
+  local vmid="$1" src="$2" dest="$3" size
   if guest_exec "$vmid" "test -e '$src'" >/dev/null; then
+    # guest agent 走 virtio-serial 的 JSON 通道，內容整包 base64 帶回來。
+    # 數 MB 的檔案會直接失敗，而失敗訊息只會說「讀不到」——先量大小，
+    # 讓這一類問題自己講清楚是什麼問題。
+    size=$(guest_exec_or_abort "$vmid" "wc -c < '$src'" "無法讀取 $src 的大小" | tr -d '\r\n')
+    [[ "$size" -le 1048576 ]] ||
+      abort "$src 有 ${size} bytes，超過 guest agent 通道能穩定傳回的大小；改在 guest 內處理後只帶回結果"
     guest_exec_or_abort "$vmid" "cat '$src'" "無法從 guest 讀取 $src" > "$dest"
     ok "已取回 $src"
   else
     : > "$dest"
     warn "guest 上沒有 $src，記為空檔"
   fi
+}
+
+# guest_diff VMID A B OUT — 在 guest 內比對兩個檔案，差異寫進 guest 的 OUT，
+# 印出差異行數。比對留在 guest：manifest 與 checksum 動輒數 MB，帶回主機只為了
+# 跑 diff 是把大量資料塞進一條窄通道，而需要的答案只有「相不相符」。
+guest_diff() {
+  guest_exec_or_abort "$1" "diff -u '$2' '$3' > '$4' 2>&1; wc -l < '$4'" \
+    "無法在 guest 內比對 $2 與 $3" | tr -d '\r\n'
 }
 
 # guest_put_file VMID DEST [MODE] — 把 stdin 的內容寫進 guest 的 DEST。
