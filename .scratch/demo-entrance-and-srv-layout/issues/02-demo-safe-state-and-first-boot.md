@@ -28,16 +28,16 @@
 
 **Status:** ready-for-agent
 
-- [ ] 執行前已確認 Demo 無既有快照，且新快照建立於停機狀態、不含記憶體映像
-- [ ] Demo 的網卡掛在 private bridge 上
-- [ ] Demo 的 Cloud-Init 位址為 `172.23.57.12/24`，gateway 為 Edge 的私有位址
-- [ ] Demo 設定為 8 vCPU、64 GiB RAM，ballooning 停用
-- [ ] 自動套件升級已關閉
-- [ ] 上述變更全部完成後，Demo 才第一次開機
+- [x] 執行前已確認 Demo 無既有快照，且新快照建立於停機狀態、不含記憶體映像
+- [x] Demo 的網卡掛在 private bridge 上
+- [x] Demo 的 Cloud-Init 位址為 `172.23.57.12/24`，gateway 為 Edge 的私有位址
+- [x] Demo 設定為 8 vCPU、64 GiB RAM，ballooning 停用
+- [x] 自動套件升級已關閉
+- [x] 上述變更全部完成後，Demo 才第一次開機
 - [ ] 開機後 UAT 的 `10.1.2.57:8081` 仍回應正常
-- [ ] 開機後 guest agent 可從 hypervisor 取得回應
-- [ ] Demo 未開啟開機自啟
-- [ ] 任一步驟讀回結果不符時，腳本停止而非繼續
+- [x] 開機後 guest agent 可從 hypervisor 取得回應
+- [x] Demo 未開啟開機自啟
+- [x] 任一步驟讀回結果不符時，腳本停止而非繼續
 
 ## Comments
 
@@ -67,6 +67,15 @@
 
 實機為 PVE 9.2.3，遠超過 8.2，卻仍被擋下。真正原因是 `qm set --help` 只印 USAGE 摘要，
 一個選項名都沒有；選項清單要問 `qm help set --verbose`。
+
+驗收框的勾選依據（2026-08-13）：腳本以 `set -euo pipefail` 加每個 stage 的 `abort` 串起來，
+所以「跑到第 N 個 stage」等同「第 1 到 N-1 個 stage 的讀回全部相符」。Demo 現在是 running
+（票 04 報告的 stage 1 讀回），代表 stage 9 的 `qm start` 執行過，因此 stage 1–8 全數通過。
+其中網卡 bridge、`ipconfig0`、`ciupgrade=0` 三項另由票 03 腳本的前置檢查獨立再讀回一次。
+guest agent 可回應由票 04 的 `qm agent ping` 直接證實。
+
+未勾的一項是 stage 10 的 `verify_uat_entrance`，它在 `qm start` **之後**，Demo running
+無法回推它跑過。待使用者確認腳本跑到「票 02 完成」那行後補勾。
 
 改法有兩層。`qm_set_options` 從 `qm help set --verbose` 取清單，問不到時輸出空字串；
 前置檢查因此能分辨「確定沒有 ciupgrade」與「問不到清單」，後者只示警不停止。決定性的

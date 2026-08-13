@@ -17,14 +17,14 @@
 
 **Status:** ready-for-agent
 
-- [ ] 報告存在於 repo，且所有數字可由報告中記錄的指令重新覆算
-- [ ] `/home/mobagel` 的大小與結構已記錄，並區分出專案 checkout 與應用持久資料
-- [ ] Docker 的 containers、images、volumes 用量與現行 data-root 已記錄
-- [ ] Demo 上目前提供 `443` 與 `80` 的服務已辨識
-- [ ] 所有相關 volume 的容量與剩餘空間已記錄
-- [ ] 引用舊路徑的設定已列成清單
-- [ ] guest 狀態未被本票改動
-- [ ] 報告中不含任何 secret 值
+- [x] 報告存在於 repo，且所有數字可由報告中記錄的指令重新覆算
+- [x] `/home/mobagel` 的大小與結構已記錄，並區分出專案 checkout 與應用持久資料
+- [x] Docker 的 containers、images、volumes 用量與現行 data-root 已記錄
+- [x] Demo 上目前提供 `443` 與 `80` 的服務已辨識
+- [x] 所有相關 volume 的容量與剩餘空間已記錄
+- [x] 引用舊路徑的設定已列成清單
+- [x] guest 狀態未被本票改動
+- [x] 報告中不含任何 secret 值
 
 ## Comments
 
@@ -45,3 +45,9 @@ secret 防護做在收集端而非事後清洗：引用舊路徑的部分用 `gr
 
 高熵字串掃描原本的 `grep | head` 在 `pipefail` 下會因 SIGPIPE 回非 0，命中超過 20 筆時反而印出
 「（無符合項）」—— 對一個 secret 掃描來說是最糟的失敗方向。已改成先收集再截斷。
+
+實跑完成，報告在 `docs/reports/demo-inventory-20260813.md`（629 行，產生時間 2026-08-13T14:31:19+08:00）。
+七節齊全，末尾的 `readback` 確認 Demo 仍是 running，全程唯讀。報告只出現環境檔的**鍵名**，
+`/etc/fstab` 與 `daemon.json` 實際上沒有可遮蔽的欄位（無 CIFS 掛載、無 registry 認證）。
+
+報告的量測結果推翻了票 05 與票 06 的兩項前提，已寫入票 05 的 `## Comments`。
