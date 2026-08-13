@@ -34,7 +34,7 @@
 - [x] Demo 設定為 8 vCPU、64 GiB RAM，ballooning 停用
 - [x] 自動套件升級已關閉
 - [x] 上述變更全部完成後，Demo 才第一次開機
-- [ ] 開機後 UAT 的 `10.1.2.57:8081` 仍回應正常
+- [x] 開機後 UAT 的 `10.1.2.57:8081` 仍回應正常
 - [x] 開機後 guest agent 可從 hypervisor 取得回應
 - [x] Demo 未開啟開機自啟
 - [x] 任一步驟讀回結果不符時，腳本停止而非繼續
@@ -74,8 +74,8 @@
 其中網卡 bridge、`ipconfig0`、`ciupgrade=0` 三項另由票 03 腳本的前置檢查獨立再讀回一次。
 guest agent 可回應由票 04 的 `qm agent ping` 直接證實。
 
-未勾的一項是 stage 10 的 `verify_uat_entrance`，它在 `qm start` **之後**，Demo running
-無法回推它跑過。待使用者確認腳本跑到「票 02 完成」那行後補勾。
+唯一推不到的是 stage 10 的 `verify_uat_entrance`——它在 `qm start` **之後**，Demo running
+無法回推它跑過。使用者確認腳本跑到「票 02 完成」那行，據此補勾，全票通過。
 
 改法有兩層。`qm_set_options` 從 `qm help set --verbose` 取清單，問不到時輸出空字串；
 前置檢查因此能分辨「確定沒有 ciupgrade」與「問不到清單」，後者只示警不停止。決定性的

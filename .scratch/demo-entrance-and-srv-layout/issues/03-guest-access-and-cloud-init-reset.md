@@ -19,12 +19,12 @@
 - [x] Cloud-Init 重置前，authorized SSH keys、掛載表與網路設定目錄已備份
 - [x] 存在於 guest 但不在 hypervisor sshkeys 欄位的金鑰已明確列出
 - [x] 從 guest **內部**讀出的位址為 `172.23.57.12/24`，gateway 為 Edge 的私有位址
-- [ ] 重置後的 authorized keys、掛載表與網路設定，與備份逐項比對並記錄差異
+- [x] 重置後的 authorized keys、掛載表與網路設定，與備份逐項比對並記錄差異
 - [x] 大資料卷仍掛在原本的路徑，且其中檔案可讀
-- [ ] Demo 未被升級任何套件或作業系統版本
-- [ ] Edge 可以連到 `172.23.57.12`
-- [ ] UAT 的 `10.1.2.57:8081` 仍回應正常
-- [ ] 過程中未建立任何新憑證
+- [x] Demo 未被升級任何套件或作業系統版本
+- [x] Edge 可以連到 `172.23.57.12`
+- [x] UAT 的 `10.1.2.57:8081` 仍回應正常
+- [x] 過程中未建立任何新憑證
 
 ## Comments
 
@@ -60,5 +60,8 @@ Cloud-Init 重置，而票 04 的報告能產出就代表它 stage 1 的 `readba
 大資料卷那項由報告自身佐證，不靠腳本：`findmnt` 顯示 `/data/model-cache` 掛在 `/dev/sdc1`
 xfs、已用 17.9G，`/etc/fstab` 的 `UUID=238cc650…` 那行也在。
 
-未勾的四項全在 stage 7 之後（逐項比對、dpkg SHA-256、Edge ping、UAT 入口與 cipassword
-斷言），報告推不到那裡。同樣待確認腳本跑到「票 03 完成」那行後補勾。
+推不到的是 stage 7 之後那四項（逐項比對、dpkg SHA-256、Edge ping、UAT 入口與 cipassword
+斷言）。使用者確認腳本跑到「票 03 完成」那行，據此補勾，全票通過。
+
+其中 dpkg SHA-256 那項是強驗證：stage 9 的 `readback` 比對重置前後 `dpkg-query -W` 清單的
+雜湊，不符即停止。腳本跑完等同雜湊相符，「未升級任何套件」不是承諾而是讀回結果。
