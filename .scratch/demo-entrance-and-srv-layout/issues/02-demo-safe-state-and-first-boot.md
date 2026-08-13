@@ -38,3 +38,24 @@
 - [ ] 開機後 guest agent 可從 hypervisor 取得回應
 - [ ] Demo 未開啟開機自啟
 - [ ] 任一步驟讀回結果不符時，腳本停止而非繼續
+
+## Comments
+
+交付：`scripts/demo-entrance-and-srv-layout/02-demo-safe-state.sh`，由使用者在 PVE host 以 root 執行。
+
+腳本的 10 個 stage 對應票上的順序，不可調換。每個 `qm set` 之後都以 `qm config` 讀回比對；
+不符即 `abort`，整個序列停止而不繼續（`wizard.test.sh` 對這個行為有測試）。
+
+實作上的兩個判斷：
+
+- 網卡改寫只替換 `bridge=` 欄位，model、MAC 與 `firewall=`／`tag=`／`mtu=` 原樣保留，
+  避免重建 net0 字串時漏掉旗標。這段抽成 `net0_bridge_set`，有測試。
+- Demo 若不是停機狀態，腳本以 `[HUMAN ACTION]` 停止而不代為關機 —— 快照必須在停機狀態
+  建立才不含記憶體映像，而關機是使用者該自己下的決定。
+
+前置檢查另外驗證 `vmbr3` 沒有實體 bridge port、PVE host 在其上沒有 IP，以及此 PVE 版本的
+`qm set` 支援 `--ciupgrade`（需 8.2 以上）；缺任一項就停止，因為那是「開機安全」的前提。
+
+審查後修正：`ciupgrade` 支援度改用 `qm_supports_option`。原本的 `qm set --help | grep -q` 在
+`pipefail` 下會被 `qm` 自己的非 0 結束碼誤判成「不支援」而無故停止；而傳進去的 `--` 又讓 grep
+永遠命中，使這道守衛形同虛設。兩種錯法都有測試。

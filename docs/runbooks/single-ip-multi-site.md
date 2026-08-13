@@ -5,7 +5,7 @@
 | Role | PVE VM | Address | Published mapping |
 | --- | --- | --- | --- |
 | Edge | 104 `single-ip-edge` | `10.1.2.57/24`, `172.23.57.1/24` | TCP `8081` |
-| Type AI UAT | 105 `type-ai-platform-backend` | `172.23.57.11/24` | `8081 -> 172.23.57.11:443 -> nginx:443` |
+| Type AI UAT | 105 `type-ai-platform-uat` | `172.23.57.11/24` | `8081 -> 172.23.57.11:443 -> nginx:443` |
 
 The current client URL is `https://10.1.2.57:8081`. It uses the UAT nginx self-signed certificate; the browser will show a certificate warning once. DNS, ACME, publicly trusted TLS, WireGuard and hostname routing are not part of this deployment.
 
@@ -37,7 +37,7 @@ sudo nft list ruleset
 curl -kfsS https://172.23.57.11:443/healthz
 ```
 
-Backend checks, reached through the Edge SSH jump host:
+UAT private guest checks, reached through the Edge SSH jump host:
 
 ```bash
 systemctl status docker type-ai-platform-firewall.service type-ai-platform-health.timer
@@ -105,7 +105,7 @@ sudo mv -f "$tmp" /etc/type-ai-platform/uat-nginx-cert.sha256
 trap - EXIT
 ```
 
-The backend health timer extracts the certificate from
+The UAT health timer extracts the certificate from
 `172.23.57.11:443`, requires at least 30 days before expiry, and compares its
 SHA-256 fingerprint with that file. `curl -k` is an explicit exception only for
 this fixed private UAT endpoint because the certificate is self-signed; it does
@@ -161,12 +161,12 @@ The UAT frontend/API flow is now available through the same nginx port. It is st
 
 ## Add an entrance port
 
-1. Allocate one unused TCP port and one explicit `backend_ip:backend_port`; do not create ranges or catch-all rules.
+1. Allocate one unused TCP port and one explicit `private_guest_ip:service_port`; do not create ranges or catch-all rules.
 2. Prove the private endpoint is healthy from `172.23.57.1`.
 3. Add all three matching rules to the Edge ruleset:
    - forward allow for the approved FortiGate source, destination and translated port;
    - prerouting DNAT from the entrance port;
-   - postrouting SNAT to `172.23.57.1`, so the backend only trusts the Edge source.
+   - postrouting SNAT to `172.23.57.1`, so the private guest only trusts the Edge source.
 4. Validate the candidate without changing the running rules:
 
    ```bash
@@ -174,7 +174,7 @@ The UAT frontend/API flow is now available through the same nginx port. It is st
    ```
 
 5. Back up `/etc/nftables.conf`, install the validated candidate and reload `nftables`.
-6. Confirm the allocated port returns the expected backend response, another unallocated port fails, direct backend access fails and `10.1.2.50:8006` management remains unchanged.
+6. Confirm the allocated port returns the expected private guest response, another unallocated port fails, direct private guest access fails and `10.1.2.50:8006` management remains unchanged.
 7. Reboot the Edge in an approved window and repeat the checks.
 
 ## Remove or roll back an entrance port
@@ -182,7 +182,7 @@ The UAT frontend/API flow is now available through the same nginx port. It is st
 1. Remove only that service's forward, DNAT and SNAT tuple from a candidate ruleset.
 2. Run `nft -c -f` before installation.
 3. Back up the current rules, install the candidate and reload.
-4. Prove the removed port fails closed and every retained port still reaches the correct backend.
+4. Prove the removed port fails closed and every retained port still reaches the correct private guest.
 
 For a failed Edge change, validate a known-good `/etc/nftables.conf.before-*` file before restoring it. Never install an unvalidated backup. The repository ruleset contains the current single 8081 mapping and can be used to reconstruct the Edge after verifying interface names and addresses.
 
@@ -194,7 +194,7 @@ Backups must include:
 
 - VM 104 and VM 105 PVE configuration and disks;
 - Edge `/etc/nftables.conf`, `/etc/sysctl.d/99-zz-single-ip-edge.conf`, health script and systemd units;
-- backend `/etc/fstab`, `/etc/docker/daemon.json`, deployment override, firewall and health scripts/units;
+- UAT `/etc/fstab`, `/etc/docker/daemon.json`, deployment override, firewall and health scripts/units;
 - the deployed immutable Git revision;
 - `/srv/platform` Docker volumes and persistent application data.
 

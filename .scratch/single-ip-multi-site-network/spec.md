@@ -16,7 +16,7 @@ Status: ready-for-agent
 
 PVE 新增一個不連接實體網卡的私有 Linux bridge。Edge VM 的前端網卡連接既有實體 bridge 並使用 `10.1.2.57`；後端網卡連接私有 bridge 並使用 `172.23.57.1/24`。網站 guest 使用 `172.23.57.0/24` 的位址，以 Edge VM 作 default gateway。
 
-每個內部服務配置一個獨立且可稽核的入口 TCP port。初始配置保留 `8081` 給 Type AI Platform、`8082` 給第二個驗證服務；nftables 將每個入口 port DNAT 到指定的私有 backend IP 與 service port。未配置的 port 維持拒絕。現行 UAT 將 `8081` 送至 `172.23.57.11:18000`，再由 nginx 終止自簽 HTTPS 並同源轉發 frontend/API。
+每個內部服務配置一個獨立且可稽核的 entrance port。初始配置保留 `8081` 給 Type AI Platform UAT、`8082` 給第二個服務；`8082` 現為常駐 entrance port（見 ADR-0001），不是可拋棄的驗收工具。nftables 將每個 entrance port DNAT 到指定的 private guest IP 與 service port。未配置的 port 維持拒絕。現行 UAT 將 `8081` 送至 `172.23.57.11:18000`，再由 nginx 終止自簽 HTTPS 並同源轉發 frontend/API。
 
 VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 明確放行的 `10.1.2.57:<port>` 存取服務。UAT 入口使用自簽 HTTPS；不簽發公開信任憑證，也不要求 DNS。PVE 管理介面繼續使用 `10.1.2.50:8006`，不經過 Edge 服務入口。
 
@@ -49,7 +49,7 @@ VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 明確放行�
 21. As a network administrator, I want `10.1.2.57` formally reserved and excluded from DHCP, so that the Edge VM never encounters an address conflict.
 22. As a network administrator, I want the switch and NAC policy to explicitly permit the Edge VM MAC address, so that bridged guest networking works without bypassing port security.
 23. As a network administrator, I want the currently approved FortiClient path empirically verified against every assigned port on `10.1.2.57`, so that deployment stops if the existing FortiGate path does not carry the required traffic.
-24. As a network administrator, I want the initial allowed-port set limited to `8081` and the temporary validation port `8082`, so that the deployment does not create a broad port range.
+24. As a network administrator, I want the initial allowed-port set limited to the two entrance ports `8081` and `8082`, so that the deployment does not create a broad port range.
 25. As an operator, I want every allocated entrance port recorded with its backend IP and service port, so that changes remain auditable.
 26. As an operator, I want port collisions detected before firewall rules are applied, so that one service cannot silently replace another.
 27. As a security administrator, I want all Edge VM input and forwarding chains to default to deny, so that only explicitly allowed flows are possible.
@@ -99,7 +99,7 @@ VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 明確放行�
 - The Edge VM front prefix, default gateway and DNS resolver are read from the existing approved `10.1.2.0/24` network configuration. They are environment inputs, not invented defaults.
 - The network administrator must confirm that `10.1.2.57` is reserved outside DHCP and that the switch or NAC permits the Edge VM's MAC address. Failure of either check blocks deployment.
 - Caddy, Nginx, HAProxy, Traefik and GUI proxy managers are not part of the initial entrance. nftables performs explicit destination NAT from each front-side TCP port to one private backend endpoint.
-- The initial port allocation is `10.1.2.57:8081` for Type AI Platform and `10.1.2.57:8082` for the temporary second-service acceptance test. Additional services require an explicit, non-conflicting port assignment and firewall review.
+- The initial port allocation is `10.1.2.57:8081` for Type AI Platform UAT and `10.1.2.57:8082` for the second environment. `8082` was originally designated a temporary second-service acceptance port; it is now a permanent entrance port, as recorded in ADR-0001. Additional services require an explicit, non-conflicting port assignment and firewall review.
 - Each published service has one auditable `front_port -> backend_ip:backend_port` mapping. There is no automatic discovery or catch-all destination.
 - Unassigned front ports are rejected by the default-deny policy. A request cannot fall through to another backend.
 - DNAT preserves the original application protocol and does not add trusted proxy headers. Backends must not trust client-supplied `Forwarded` or `X-Forwarded-*` headers as Edge identity evidence.
@@ -123,7 +123,7 @@ VPN 使用者不取得私有 subnet 的 route，只能經 Edge VM 明確放行�
 
 - The primary test seam is one black-box client boundary representing a user already connected to FortiClient. Tests assert observable `IP:port` routing and isolation behavior without inspecting nftables internals.
 - `10.1.2.57:8081` must return the Type AI Platform response through the approved VPN path.
-- `10.1.2.57:8082` must return a distinguishable response from the temporary second backend during multi-service acceptance.
+- `10.1.2.57:8082` must return a response distinguishable from `8081`'s during multi-service acceptance.
 - Before permanent publication, the same approved FortiClient client must repeat `Test-NetConnection` against each allocated port. Both temporary preflight probes and final service probes must be recorded with source address, destination and result.
 - An unassigned entrance port must fail closed and must not reach any backend.
 - No DNS lookup or hostname is required by this design. UAT HTTPS uses an IP and port and may show a self-signed certificate warning; a publicly trusted certificate is not a requirement.

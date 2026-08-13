@@ -1,6 +1,6 @@
 # PVE 單一 IP 多網站網路架構研究
 
-> **Implementation decision (2026-08-11):** 使用者已取消 DNS、hostname routing、ACME 與公開信任 TLS，改採 `10.1.2.57:<port>`。目前 spec 以 nftables 明確 DNAT 為準：Type AI Platform 使用 TCP `8081`，第二驗證服務暫用 TCP `8082`。本文其餘 DNS／Caddy／TLS 內容保留為已捨棄方案的研究紀錄，不是目前實作要求。
+> **Implementation decision (2026-08-11):** 使用者已取消 DNS、hostname routing、ACME 與公開信任 TLS，改採 `10.1.2.57:<port>`。目前 spec 以 nftables 明確 DNAT 為準：Type AI Platform UAT 使用 TCP `8081`，Demo 使用 TCP `8082`；`8082` 已由臨時驗收 port 改為常駐 entrance port（見 ADR-0001）。本文其餘 DNS／Caddy／TLS 內容保留為已捨棄方案的研究紀錄，不是目前實作要求。
 
 研究日期：2026-08-11
 
@@ -10,9 +10,9 @@
 
 - `10.1.2.57` 是 VPN 使用者唯一會連到的網站入口。
 - PVE 保留 `10.1.2.50:8006` 作管理介面，不把管理頁納入網站入口。
-- PVE 新增一個不接實體網卡的私有 Linux bridge，例如 `vmbr1`；後端 VM/LXC 只使用私有位址。
-- 建立一台專用 edge VM，前端網卡使用 `10.1.2.57`，後端網卡接 `vmbr1`。該 VM 執行 Caddy、nftables、IPv4 forwarding 與 outbound NAT。
-- 所有網站名稱在 VPN 內解析為 `10.1.2.57`；Caddy 依 hostname 將 HTTPS 請求轉送到不同私有後端。
+- PVE 新增一個不接實體網卡的私有 Linux bridge，例如 `vmbr1`；私有 guest 只使用私有位址。
+- 建立一台專用 edge VM，前端網卡使用 `10.1.2.57`，私有側網卡接 `vmbr1`。該 VM 執行 Caddy、nftables、IPv4 forwarding 與 outbound NAT。
+- 所有網站名稱在 VPN 內解析為 `10.1.2.57`；Caddy 依 hostname 將 HTTPS 請求轉送到不同私有 guest。
 - TLS 使用組織持有的正式網域與 ACME DNS-01，讓瀏覽器取得公開信任的憑證，不要求每位使用者另裝私有 CA。
 
 WireGuard 是建立另一個加密 L3 tunnel 的工具，不是單一 IP 上承載多個網站所需的分流元件。現有 FortiClient VPN 已讓使用者到達 `10.1.2.0/24`，再加 WireGuard只會增加第二套金鑰、路由與 tunnel 的管理工作。
@@ -145,7 +145,7 @@ WireGuard 只有在下列需求改變時才重新評估：
 - L2：edge VM 的 front NIC 接 `vmbr0`，以自己的 MAC 使用 `10.1.2.57`。交換器與 NAC/port-security 必須允許該 MAC。
 - L3：VPN client 只需有到 `10.1.2.57` 的既有 route；不需要知道 `172.23.57.0/24`。
 - 回程：edge VM 的 front default gateway 使用 `10.1.2.0/24` 現場既有 gateway；私有 guests 的 default gateway 使用 edge VM 的 `172.23.57.1`。
-- `vmbr1` 不接實體 NIC；PVE host 不在該 subnet 配 IP，避免讓 backend 直接碰到 PVE host 的 L3 management surface。
+- `vmbr1` 不接實體 NIC；PVE host 不在該 subnet 配 IP，避免讓私有 guest 直接碰到 PVE host 的 L3 management surface。
 
 ### 未選的直接 routed subnet
 
@@ -158,13 +158,13 @@ WireGuard 只有在下列需求改變時才重新評估：
 - FortiGate：VPN 到 `10.1.2.57` 僅允許 TCP `80/443`，並以實際使用者群組與來源 pool 限制；一般網站使用者不得因此取得 `10.1.2.50:8006` 權限。
 - Edge VM input：default deny；允許 loopback、必要 ICMP、`established/related`、指定 VPN/LAN 來源的 `80/443`。SSH 僅允許管理來源與金鑰驗證。
 - Edge VM forward：default deny；不允許 front 主動 forward 到 private subnet。只允許 private guests 必要的 outbound 流量及回程。
-- Edge VM/Caddy 到 backend：只開各網站實際 port。每個 guest 的 PVE/guest firewall 僅允許 edge VM 私有 IP 連入 web port。
-- Backend east-west：預設不互信；需要互通的應用再明列規則。單一 flat `vmbr1` 的 guests 在 L2 上相鄰，必須依靠 PVE per-guest firewall 或 guest firewall 落實。
+- Edge VM/Caddy 到私有 guest：只開各網站實際 port。每個 guest 的 PVE/guest firewall 僅允許 edge VM 私有 IP 連入 web port。
+- 私有 guest east-west：預設不互信；需要互通的應用再明列規則。單一 flat `vmbr1` 的 guests 在 L2 上相鄰，必須依靠 PVE per-guest firewall 或 guest firewall 落實。
 - PVE 管理：維持獨立的 `.50:8006`，不經 Caddy、不使用公開網站 hostname，也不把 PVE API credential 放進 edge VM。
-- TLS 到 backend：若 backend segment 的威脅模型要求加密，使用可驗證的 upstream certificate/trust pool；不要使用 `tls_insecure_skip_verify`。Caddy 官方明確警告該選項會關閉 TLS 驗證。[Caddy reverse_proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#https)
+- TLS 到私有 guest：若私有 segment 的威脅模型要求加密，使用可驗證的 upstream certificate/trust pool；不要使用 `tls_insecure_skip_verify`。Caddy 官方明確警告該選項會關閉 TLS 驗證。[Caddy reverse_proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#https)
 - Credential：DNS API token、ACME account key、Caddy private key 與備份均視為機密；限制檔案權限並避免寫入 repo。
 
-edge VM 同時是 reverse proxy 與 router，是為了在目前小型、VPN-only、單 PVE 的條件下保持最少元件。接受的代價是 edge VM 被入侵或停止時，入口與 guest outbound 會一起受影響；若風險或規模提升，再拆成 firewall/router VM 與 proxy VM，並切分 DMZ/backend segment。
+edge VM 同時是 reverse proxy 與 router，是為了在目前小型、VPN-only、單 PVE 的條件下保持最少元件。接受的代價是 edge VM 被入侵或停止時，入口與 guest outbound 會一起受影響；若風險或規模提升，再拆成 firewall/router VM 與 proxy VM，並切分 DMZ/私有 segment。
 
 ## 單點失效
 
@@ -176,7 +176,7 @@ edge VM 同時是 reverse proxy 與 router，是為了在目前小型、VPN-only
 - 內部 DNS；
 - ACME renewal 所需的公開 DNS API。
 
-WireGuard不會消除任何上述單點。現階段可做的是：edge VM 設定開機自動啟動、備份 VM 與 Caddy/nftables 設定、保存可重建文件、監控 DNS/HTTPS/backend/憑證到期日，並定期做還原演練。
+WireGuard不會消除任何上述單點。現階段可做的是：edge VM 設定開機自動啟動、備份 VM 與 Caddy/nftables 設定、保存可重建文件、監控 DNS/HTTPS/私有 guest/憑證到期日，並定期做還原演練。
 
 真正的高可用需要至少第二台 PVE/edge instance、可移動或可負載平衡的入口 IP、同步設定及避免 split-brain 的機制；這超出目前資源條件。
 
@@ -184,7 +184,7 @@ WireGuard不會消除任何上述單點。現階段可做的是：edge VM 設定
 
 | 工具 | 官方能力 | 本案決策 |
 |---|---|---|
-| Caddy | hostname site blocks、reverse proxy、自動 HTTPS/DNS challenge | 採用；靜態 VM/LXC backend 的設定最直接 |
+| Caddy | hostname site blocks、reverse proxy、自動 HTTPS/DNS challenge | 採用；靜態 VM/LXC 私有 guest 的設定最直接 |
 | Nginx | `server_name` 選擇 virtual server，`proxy_pass` 到 backend | 可行，但憑證自動化需另組流程；不採用。[Nginx server names](https://nginx.org/en/docs/http/server_names.html)、[proxy module](https://nginx.org/en/docs/http/ngx_http_proxy_module.html) |
 | HAProxy | ACL/content switching 與進階 L4/L7 load balancing | 可行，但目前需求不需其較進階的 LB 配置；不採用。[HAProxy proxying essentials](https://www.haproxy.com/documentation/haproxy-configuration-tutorials/proxying-essentials/) |
 | Traefik | Host rules、動態 provider/service discovery、TLS routers | 若網站全由 Docker/Kubernetes labels 動態管理才較有優勢；混合 PVE VM/LXC 不採用。[Traefik routers](https://doc.traefik.io/traefik/routing/routers/) |
@@ -195,17 +195,17 @@ WireGuard不會消除任何上述單點。現階段可做的是：edge VM 設定
 1. 盤點與保留資源：確認 `.57`、CIDR、gateway、額外 MAC、FortiGate route/policy、DNS 控制權與非 HTTP 服務。
 2. 建立 `vmbr1` 與 edge VM，但不改動 PVE `.50` 的 management address/default gateway。
 3. 在 edge VM 完成 nftables、forwarding 與 NAT；先驗證一台測試 guest 能對外、不能由 front 直接進入。
-4. 安裝 Caddy，先以測試 hostname/backend 驗證 routing，再接正式 DNS-01。正式簽發前使用 CA staging environment，避免反覆測試觸發 rate limit。
+4. 安裝 Caddy，先以測試 hostname/私有 guest 驗證 routing，再接正式 DNS-01。正式簽發前使用 CA staging environment，避免反覆測試觸發 rate limit。
 5. 設定內部 DNS 與 FortiClient split DNS，最後才逐站加入 Caddy。
 6. 啟用 PVE/guest firewall、備份、監控與自動啟動；完成 reboot/restore 測試。
 
 完成標準：
 
 - 使用者只連既有 FortiClient，不裝 WireGuard、不改 `hosts`。
-- `app1`、`app2` 等名稱都解析為 `10.1.2.57`，但分別抵達正確 backend。
+- `app1`、`app2` 等名稱都解析為 `10.1.2.57`，但分別抵達正確的私有 guest。
 - 瀏覽器顯示公開信任、hostname 相符且可自動續期的 HTTPS 憑證。
-- 未知 hostname 不會落到任一 backend。
-- VPN client 沒有到私有 subnet 的 route，也不能直接掃描/連線 backend。
+- 未知 hostname 不會落到任一私有 guest。
+- VPN client 沒有到私有 subnet 的 route，也不能直接掃描/連線私有 guest。
 - guest 能做必要的 outbound 更新，但不能主動存取 PVE `10.1.2.50:8006`。
 - PVE 管理頁仍只在原有 `.50:8006` 管理路徑上使用。
 - PVE/edge VM reboot 後，bridge、firewall、NAT、Caddy、DNS 與所有必要服務能自動恢復。

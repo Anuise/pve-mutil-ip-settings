@@ -25,3 +25,23 @@
 - [ ] 引用舊路徑的設定已列成清單
 - [ ] guest 狀態未被本票改動
 - [ ] 報告中不含任何 secret 值
+
+## Comments
+
+交付：`scripts/demo-entrance-and-srv-layout/04-inventory.sh`，唯讀，產出 Markdown 報告。
+
+報告把**指令與輸出寫在一起**，所以每個數字都能重新覆算 —— 這是票上「可由報告中記錄的
+指令重新覆算」的直接作法。
+
+secret 防護做在收集端而非事後清洗：引用舊路徑的部分用 `grep -o` 只輸出被引用的路徑本身、
+不輸出整行；環境檔只列鍵名與檔案 mode，不讀值。收尾另有一次高熵字串掃描供人工複核
+（image ID 與 checksum 會被誤判，屬正常）。
+
+報告產在 PVE host 上，需使用者 `scp` 進 repo 的 `docs/reports/`；該目錄尚不存在，複製時建立。
+
+審查後修正：`cat /etc/fstab` 與 `cat /etc/docker/daemon.json` 的輸出在寫進報告前先過
+`redact_secrets`。fstab 可帶 CIFS `password=`／`credentials=`，daemon.json 可帶 registry 認證 ——
+原本宣稱「防護做在收集端」，這兩個 probe 卻是逐字照抄。遮蔽有測試。
+
+高熵字串掃描原本的 `grep | head` 在 `pipefail` 下會因 SIGPIPE 回非 0，命中超過 20 筆時反而印出
+「（無符合項）」—— 對一個 secret 掃描來說是最糟的失敗方向。已改成先收集再截斷。

@@ -1,6 +1,6 @@
 # 單一 IP、多服務 Port 的 PVE 私有網路架設教學
 
-本教學說明如何在 Proxmox VE（PVE）上，以一個既有內部 IP `10.1.2.57` 對 FortiClient VPN 使用者發布多個服務。每個服務使用不同 TCP port，backend VM 不取得額外 `10.1.2.x` 位址，也不使用 DNS、WireGuard、公開信任 TLS 或 hostname routing。
+本教學說明如何在 Proxmox VE（PVE）上，以一個既有內部 IP `10.1.2.57` 對 FortiClient VPN 使用者發布多個服務。每個服務使用不同 TCP port，private guest 不取得額外 `10.1.2.x` 位址，也不使用 DNS、WireGuard、公開信任 TLS 或 hostname routing。
 
 內容以本環境實際完成並驗證的部署為基準；秘密值、GitLab token、VPN 帳密與應用 `.env` value 均不會出現在文件中。
 
@@ -20,7 +20,7 @@ flowchart LR
     F["FortiGate<br/>目前觀察到來源 NAT<br/>192.168.255.253"]
     E0["Edge VM 104 eth0<br/>10.1.2.57/24"]
     E1["Edge VM 104 eth1<br/>172.23.57.1/24"]
-    B["Backend VM 105<br/>172.23.57.11/24"]
+    B["UAT private guest VM 105<br/>172.23.57.11/24"]
     A["UAT nginx<br/>host 18000 → container 443<br/>backend/frontend same origin"]
     P["PVE host<br/>10.1.2.50:8006"]
 
@@ -32,7 +32,7 @@ flowchart LR
     C -. "既有管理路徑；不經 Edge DNAT" .-> P
 ```
 
-Edge VM 是唯一網路邊界，不執行網站容器。正式應用放在私有 backend VM；PVE host 在私有 bridge 上沒有 IP。
+Edge VM 是唯一網路邊界，不執行網站容器。正式應用放在 private guest；PVE host 在私有 bridge 上沒有 IP。
 
 ### 本環境的固定配置
 
@@ -47,10 +47,10 @@ Edge VM 是唯一網路邊界，不執行網站容器。正式應用放在私有
 | Edge VM | VM 104 `single-ip-edge` |
 | Edge 外部位址 | `10.1.2.57/24` |
 | Edge 私有位址 | `172.23.57.1/24` |
-| Backend VM | VM 105 `type-ai-platform-backend` |
-| Backend 位址 | `172.23.57.11/24`，gateway `172.23.57.1` |
+| UAT private guest | VM 105 `type-ai-platform-uat` |
+| UAT 位址 | `172.23.57.11/24`，gateway `172.23.57.1` |
 | Type AI entrance | TCP `8081`，HTTPS UAT nginx |
-| Type AI backend endpoint | `172.23.57.11:18000` → nginx container `443` |
+| Type AI UAT endpoint | `172.23.57.11:18000` → nginx container `443` |
 | 來源 template | VM 109 `ub-26-4-srv-docker` |
 | VM storage | `VMdisk`；不使用 `local-zfs` |
 
@@ -65,7 +65,7 @@ Edge VM 是唯一網路邊界，不執行網站容器。正式應用放在私有
 - 已確認 PVE out-of-band console、IPMI、iKVM 或等效回復路徑。
 - 目前 FortiClient session 可連 `10.1.2.50:8006`。
 - 套用 PVE network 變更後，會立即重新驗證管理頁面。
-- 操作者持有 backend／template 使用的 SSH private key；本環境使用：
+- 操作者持有 private guest／template 使用的 SSH private key；本環境使用：
 
   ```text
   C:\Users\User\.ssh\ci-template-key
@@ -106,7 +106,7 @@ Edge VM 是唯一網路邊界，不執行網站容器。正式應用放在私有
 - net0 接 `vmbr0`；
 - Cloud-Init 使用 DHCP。
 
-建立 full clone 前，確認目標 storage 在 clone 後仍至少保留 20% 空間。本環境清理已核准的舊 2T VM 103 disk 後，`VMdisk` 可用約 4.19 TB，才繼續建立 Edge 與 backend clone。
+建立 full clone 前，確認目標 storage 在 clone 後仍至少保留 20% 空間。本環境清理已核准的舊 2T VM 103 disk 後，`VMdisk` 可用約 4.19 TB，才繼續建立 Edge 與 UAT clone。
 
 > 不要把清理舊磁碟當成一般步驟。只有在識別精確 disk、完成資料搬移與 checksum、取得不可逆刪除核准後才能執行。
 
@@ -220,7 +220,7 @@ test "$(cat /proc/sys/net/ipv4/ip_forward)" = 1
 .scratch/single-ip-multi-site-network/nftables.edge.conf
 ```
 
-初次建立 Edge 時，先使用沒有 DNAT tuple 的版本；只有 backend 私網 health 通過後才加入 8081。
+初次建立 Edge 時，先使用沒有 DNAT tuple 的版本；只有 UAT 私網 health 通過後才加入 8081。
 
 每次更新都先驗證候選檔：
 
@@ -246,11 +246,11 @@ sudo nft list ruleset
 - 私網 guest 只允許 ICMP、DNS、NTP、HTTP、HTTPS outbound；
 - 私網 guest 主動連 `10.1.2.0/24` 明確 drop；
 - 私網 outbound masquerade；
-- 未配置 entrance port 沒有 catch-all backend。
+- 未配置 entrance port 沒有 catch-all 目的地。
 
 ## 5. 用隔離 Probe 驗證 NAT
 
-在正式 backend 建立前，建立一台暫時 probe：
+在正式 private guest 建立前，建立一台暫時 probe：
 
 | 項目 | 設定 |
 | --- | --- |
@@ -278,7 +278,7 @@ timeout 4 bash -lc '</dev/tcp/10.1.2.50/8006' \
 
 從 FortiClient client 直接連 probe 私網位址也必須失敗。驗收後正常關機並刪除 probe，不要留下 linked clone 或測試 IP。
 
-## 6. 建立 Backend VM 105
+## 6. 建立 UAT private guest VM 105
 
 ### 6.1 Full Clone 與資源
 
@@ -287,7 +287,7 @@ timeout 4 bash -lc '</dev/tcp/10.1.2.50/8006' \
 | 項目 | 設定 |
 | --- | --- |
 | VM ID | `105` |
-| Name | `type-ai-platform-backend` |
+| Name | `type-ai-platform-uat` |
 | Mode | Full Clone |
 | Storage | `VMdisk` |
 | Disk | template 的 100G + 200G，約 300G |
@@ -378,7 +378,7 @@ findmnt /srv/platform
 df -hT /srv/platform
 ```
 
-重啟 backend VM 後必須再次驗證 mount 與 Docker root。剩餘空間低於 20% 時停止部署。
+重啟 UAT private guest 後必須再次驗證 mount 與 Docker root。剩餘空間低於 20% 時停止部署。
 
 ## 8. 準備秘密與 Git repository
 
@@ -548,7 +548,7 @@ CLICKHOUSE_PASSWORD
 UAT_SERVER_NAME
 ```
 
-`DATABASE_URL` 與 `CLICKHOUSE_URL` 不放在 `.env.uat`；UAT Compose 會以 compose service name 與資料庫密碼組合它們。不要把開發用 `apps/backend/.env` 上傳後誤當成 UAT 設定。部署時只把本機 ignored source 的 `SESSION_SECRET` 安全地帶入遠端 `.env.uat`，資料庫密碼在 backend VM 上以 cryptographic RNG 產生。
+`DATABASE_URL` 與 `CLICKHOUSE_URL` 不放在 `.env.uat`；UAT Compose 會以 compose service name 與資料庫密碼組合它們。不要把開發用 `apps/backend/.env` 上傳後誤當成 UAT 設定。部署時只把本機 ignored source 的 `SESSION_SECRET` 安全地帶入遠端 `.env.uat`，資料庫密碼在 UAT private guest 上以 cryptographic RNG 產生。
 
 遠端驗證只報告 key 名稱、存在狀態、格式與 mode `0600`，不輸出任何 value；`.env.uat` 必須被 Git ignore。
 
@@ -558,7 +558,7 @@ UAT 使用 repository 的 `docker-compose.uat.yml`，由同一套 `Dockerfile.pr
 
 ### 9.1 建立 UAT env 與 host-port override
 
-首次部署時，在 backend VM 產生 `/srv/platform/type-ai-platform/.env.uat`，設定 mode `0600`，至少包含：
+首次部署時，在 UAT private guest 產生 `/srv/platform/type-ai-platform/.env.uat`，設定 mode `0600`，至少包含：
 
 ```text
 UAT_SERVER_NAME=10.1.2.57
@@ -568,7 +568,7 @@ ENV=dev
 SESSION_SECRET=<random>
 ```
 
-不要把值寫入 Git、ticket、terminal transcript 或一般 log。UAT 入口需使用 backend host port `18000`，但將它接到 nginx container 的 HTTPS `443`，因此在 Git 之外建立：
+不要把值寫入 Git、ticket、terminal transcript 或一般 log。UAT 入口需使用 private guest host port `18000`，但將它接到 nginx container 的 HTTPS `443`，因此在 Git 之外建立：
 
 ```text
 /srv/platform/app-data/type-ai-platform/compose.uat.deploy.yml
@@ -624,7 +624,7 @@ docker compose --env-file .env.uat \
 
 ### 9.3 私網 UAT health gate
 
-Backend VM 與 Edge VM 都使用自簽 HTTPS 驗證：
+UAT private guest 與 Edge VM 都使用自簽 HTTPS 驗證：
 
 ```bash
 curl -kfsS https://172.23.57.11:18000/healthz
@@ -671,7 +671,7 @@ trap - EXIT
 
 確認 backend、frontend、poller、Postgres、ClickHouse、nginx 都 running 且 migration 成功後，才保留 Edge 的 8081 DNAT。
 
-### 9.4 Backend service-port source restriction
+### 9.4 UAT service-port source restriction
 
 Docker published port 經 Docker FORWARD chain，不一定受一般 host input rule 控制。建立可重複執行的 `DOCKER-USER` 規則，只允許 Edge `.1` 進入 original destination port 18000：
 
@@ -728,13 +728,13 @@ Docker 的同步 `ExecStartPost` drop-in 確保每次 daemon start／restart 都
 
 ## 10. 發布 TCP 8081
 
-Backend 私網 health 通過後，才在 Edge nftables 加入三個配對規則：
+UAT 私網 health 通過後，才在 Edge nftables 加入三個配對規則：
 
 1. forward：只允許目前 empirical FortiGate source peer 到 `.11:18000`；
 2. prerouting：`8081` DNAT 到 `.11:18000`；
 3. postrouting：同一 flow SNAT 成 Edge `.1`。
 
-SNAT 不能省略。本環境 FortiGate peer `192.168.255.253` 會被 DNAT 保留成原始 source；若 backend 只允許 Edge `.1`，沒有 SNAT 就會正確地把 VPN 流量 drop。
+SNAT 不能省略。本環境 FortiGate peer `192.168.255.253` 會被 DNAT 保留成原始 source；若 UAT 只允許 Edge `.1`，沒有 SNAT 就會正確地把 VPN 流量 drop。
 
 目前規則的關鍵片段：
 
@@ -775,7 +775,11 @@ curl.exe -kfsS -o NUL -w "%{http_code}`n" https://10.1.2.57:8081/openapi.json
 
 ## 11. 驗證多 port 與 WebSocket
 
-為證明同一個 IP 能安全分流多個服務，可建立一個短生命週期的第二 backend：
+> 本節是 2026-08 當時一次性多 port 驗證的紀錄。`8082` 之後已改為 Demo（VM 103）的常駐
+> entrance port（見 ADR-0001），不要再拿它做臨時 probe。要再驗證分流時請另配一個未使用的
+> port，並重跑 FortiGate empirical gate。
+
+為證明同一個 IP 能安全分流多個服務，可建立一個短生命週期的第二個 private guest：
 
 - private IP：`172.23.57.12`；
 - local service port：同樣使用 `18000`；
@@ -783,7 +787,7 @@ curl.exe -kfsS -o NUL -w "%{http_code}`n" https://10.1.2.57:8081/openapi.json
 - response 必須與 8081 可辨識；
 - unit 應設定自動到期時間。
 
-如果正式 Docker backend 原本綁 `0.0.0.0:18000`，`.12:18000` 會顯示 address already in use。把正式 backend 收斂為 `172.23.57.11:18000`，才能讓 `.12` 重用相同 port。
+如果正式 Docker 服務原本綁 `0.0.0.0:18000`，`.12:18000` 會顯示 address already in use。把正式服務收斂為 `172.23.57.11:18000`，才能讓 `.12` 重用相同 port。
 
 暫時加入 8082 的 forward／DNAT／SNAT tuple 後驗證：
 
@@ -791,7 +795,7 @@ curl.exe -kfsS -o NUL -w "%{http_code}`n" https://10.1.2.57:8081/openapi.json
 - 8082 回第二服務識別內容；
 - 標準 WebSocket headers 可取得 `101 Switching Protocols`；
 - 8083 仍 fail closed；
-- client-supplied `Forwarded`／`X-Forwarded-For` 不影響 backend identity。
+- client-supplied `Forwarded`／`X-Forwarded-For` 不影響應用端的 client identity 判斷。
 
 完成後：
 
@@ -854,18 +858,18 @@ sudo systemctl start single-ip-edge-health.service
 sudo systemctl enable --now single-ip-edge-health.timer
 ```
 
-### Backend
+### UAT private guest
 
 `type-ai-platform-health.timer` 每五分鐘檢查：
 
 - Docker active；
 - UAT 的 Postgres、ClickHouse、backend、poller、frontend、nginx containers running；
-- backend health；
+- UAT health；
 - UAT certificate 至少 30 天有效，且 SHA-256 fingerprint 與受保護的 expected file 相符；
 - outbound HTTPS；
 - `/srv/platform` used 不超過 80%。
 
-下列 container names 對應本次 Compose project；若 project name 不同，先用 `docker ps --format '{{.Names}}'` 核對再修改。於 backend 建立：
+下列 container names 對應本次 Compose project；若 project name 不同，先用 `docker ps --format '{{.Names}}'` 核對再修改。於 UAT private guest 建立：
 
 ```bash
 sudo tee /usr/local/sbin/type-ai-platform-health >/dev/null <<'EOF'
@@ -934,7 +938,7 @@ sudo systemctl start type-ai-platform-health.service
 sudo systemctl enable --now type-ai-platform-health.timer
 ```
 
-Edge forward deny 使用 rate-limited `edge-forward-drop` journal prefix；backend 未核准 service-port 流量使用 `type-ai-drop`。不要記錄 `.env`、token 或 authorization header。
+Edge forward deny 使用 rate-limited `edge-forward-drop` journal prefix；UAT 未核准 service-port 流量使用 `type-ai-drop`。不要記錄 `.env`、token 或 authorization header。
 
 檢查：
 
@@ -948,7 +952,7 @@ journalctl -u type-ai-platform-health.service
 journalctl -k -g type-ai-drop
 ```
 
-實際重啟 Edge 與 backend VM，確認無人工介入即可恢復 8081。PVE host reboot 是另一個風險層級；未取得核准時不得用 VM reboot 結果冒充 host-level 驗收。
+實際重啟 Edge 與 UAT private guest，確認無人工介入即可恢復 8081。PVE host reboot 是另一個風險層級；未取得核准時不得用 VM reboot 結果冒充 host-level 驗收。
 
 ## 13. 常見錯誤與排查
 
@@ -967,14 +971,14 @@ Repository dev Compose 對 ClickHouse 設了 password，但 backend override URL
 1. Edge DNAT tuple；
 2. Edge forward rule；
 3. Edge postrouting SNAT；
-4. backend `DOCKER-USER` counters；
-5. backend container health。
+4. UAT `DOCKER-USER` counters；
+5. UAT container health。
 
 如果 `DOCKER-USER` drop counter 增加而 allow 不增加，通常是 DNAT flow 沒有 SNAT 成 `.1`。
 
 ### Docker 綁 `0.0.0.0` 阻止第二 IP 重用 port
 
-把 production backend host binding 收斂為指定 private IP，例如 `172.23.57.11:18000:8000`。資料庫與 ClickHouse 只綁 `127.0.0.1`。
+把 production 應用 host binding 收斂為指定 private IP，例如 `172.23.57.11:18000:8000`。資料庫與 ClickHouse 只綁 `127.0.0.1`。
 
 ### `SESSION_SECRET` 長度通過但 RNG 無效
 
@@ -1018,7 +1022,7 @@ Database migration rollback 需要應用專屬且實際測過的程序；不要�
 
 - VM 104、105 PVE config 與 disks；
 - Edge nftables、sysctl、health scripts／units；
-- backend fstab、Docker config、deployment override、firewall／health units；
+- UAT fstab、Docker config、deployment override、firewall／health units；
 - immutable Git revision；
 - `/srv/platform` named volumes 與持久資料；
 - UAT nginx certificate volume `type-ai-platform-uat_nginx-certs`、root-owned expected fingerprint file 與 remote `.env.uat`；
@@ -1030,7 +1034,7 @@ Restore drill 必須使用隔離 VMID／network，不得覆寫唯一正常的 VM
 
 - [x] `vmbr3` active，PVE host 沒有 private IP。
 - [x] Edge 為 `10.1.2.57`／`172.23.57.1`，IP forwarding 與 nftables active。
-- [x] Backend 為 `172.23.57.11`，8 vCPU／64 GiB，沒有 `10.1.2.x`。
+- [x] UAT 為 `172.23.57.11`，8 vCPU／64 GiB，沒有 `10.1.2.x`。
 - [x] Docker root、checkout、volumes、app data 均位於 `/srv/platform`。
 - [x] `/srv/platform` 保留至少 20% free space。
 - [x] `.env.uat` 在 checkout 被 Git ignore，remote mode 為 `0600`；秘密值未進 Git 或 log。
@@ -1038,11 +1042,11 @@ Restore drill 必須使用隔離 VMID／network，不得覆寫唯一正常的 VM
 - [x] PostgreSQL／ClickHouse migrations 成功。
 - [x] Edge 私網 UAT health 先通過，再保留 8081。
 - [x] `https://10.1.2.57:8081` frontend、health、docs、openapi 回 200；8082、8083 fail closed。
-- [x] VPN client 無法直接存取 private backend。
-- [x] Backend service port 只接受 Edge `.1`。
-- [x] Edge／backend VM reboot 後自動恢復（PVE host reboot 仍另行驗收）。
+- [x] VPN client 無法直接存取 private guest。
+- [x] UAT service port 只接受 Edge `.1`。
+- [x] Edge／UAT private guest reboot 後自動恢復（PVE host reboot 仍另行驗收）。
 - [x] Health timers 與 rate-limited deny logs 可稽核且不含 secrets。
-- [x] UAT self-signed certificate fingerprint／30-day expiry monitor 已加入 backend health timer；`curl -k` 僅限固定 UAT endpoint。
+- [x] UAT self-signed certificate fingerprint／30-day expiry monitor 已加入 UAT health timer；`curl -k` 僅限固定 UAT endpoint。
 - [x] VM 109 template 基線未改變。
 - [ ] Off-VPN、公網不可達、一般 VPN user 的 PVE denial、PVE host reboot 與隔離 restore drill 已另行驗證；未驗證項目不得標成成功。
 
