@@ -280,9 +280,12 @@ readback "${PLATFORM_ROOT} 重開機後的來源" "/dev/mapper/vg_data-lv_docker
   "$(guest_exec_or_abort "$DEMO_VMID" "findmnt -rno SOURCE '${PLATFORM_ROOT}'" \
      "${PLATFORM_ROOT} 重開機後沒有自動掛回" | tr -d '\n')"
 say ""
-guest_exec_or_abort "$DEMO_VMID" \
-  "findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS '${PLATFORM_ROOT}' /srv" \
-  "無法讀取掛載表" | sed 's/^/    /'
+# findmnt 只吃一個 target：給兩個會被當成「source=A 且 target=B」的配對查詢而查無結果。
+# 兩層掛載分開問，各問各的。這一行純顯示，決定性的讀回是上一行，所以失敗不停序列。
+guest_exec "$DEMO_VMID" \
+  "findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS /srv
+   findmnt -no TARGET,SOURCE,FSTYPE,OPTIONS '${PLATFORM_ROOT}'" |
+  sed 's/^/    /' || true
 readback "Docker 的 data-root（重開機後重新讀回）" "${PLATFORM_ROOT}/docker" \
   "$(guest_exec_or_abort "$DEMO_VMID" "docker info --format '{{.DockerRootDir}}'" \
      "無法讀取 data-root" | tr -d '\n')"
