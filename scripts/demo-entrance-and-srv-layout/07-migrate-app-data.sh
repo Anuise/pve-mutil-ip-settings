@@ -122,15 +122,15 @@ note "只為了跑 diff，是把大量資料塞進 guest agent 那條窄通道�
 note "「相不相符」與不符的那幾行。完整清單留在 guest 的 ${GUEST_STATE}。"
 
 say ""
-# 不寫成 say "$(guest_exec_or_abort …)"：abort 在 command substitution 裡只殺得掉
-# subshell，say 拿到空字串照樣回 0，序列會印完「已停止」再繼續跑下去。
-counts=$(guest_exec_or_abort "$DEMO_VMID" "
+# 這幾個數字是給人看的，決定性的判準是下面的逐檔 diff。清點不到不停序列 ——
+# 顯示用的一行不該有停掉整段的權力（票 06 的 findmnt 是同一回事）。
+counts=$(guest_exec "$DEMO_VMID" "
 printf '檔案數：來源 %s，目標 %s\n' \
   \"\$(wc -l < '${GUEST_STATE}/src-sha256.txt')\" \"\$(wc -l < '${GUEST_STATE}/dst-sha256.txt')\"
 printf '項目數：來源 %s，目標 %s' \
   \"\$(wc -l < '${GUEST_STATE}/src-manifest.txt')\" \"\$(wc -l < '${GUEST_STATE}/dst-manifest.txt')\"
-" "無法清點來源與目標")
-say "$counts"
+" || true)
+say "${counts:-（清點不到，不影響下面的逐檔比對）}"
 
 for kind in sha256 manifest; do
   case "$kind" in
