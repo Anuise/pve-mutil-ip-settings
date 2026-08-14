@@ -48,7 +48,9 @@ say "不看票 07 留下的舊紀錄，現在重算一次 —— 刪除是不可
 # 的下場是清單只寫到一半、比對卻說相符 —— 在刪除前拿到這個結論最危險。
 GUEST_EXEC_TIMEOUT=3600
 
-guest_exec_or_abort "$DEMO_VMID" "
+# 用會等 agent 回來的版本：走完七萬個檔案之後 agent 會有一段時間叫不動，
+# 而重跑只是把同一份清單再寫一次。
+guest_retry_or_abort "$DEMO_VMID" "
 set -e
 mkdir -p '${GUEST_STATE}'
 cd '${SRC_DIR}' && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum \
@@ -60,10 +62,10 @@ cd '${DST_DIR}' && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha25
 note "比對在 guest 內做：清單有數萬行，帶回主機只為了跑 diff 是把大量資料塞進"
 note "guest agent 那條窄通道。完整清單留在 guest 的 ${GUEST_STATE}。"
 
-DST_FILES=$(guest_exec_or_abort "$DEMO_VMID" "wc -l < '${GUEST_STATE}/dst-sha256.txt'" \
+DST_FILES=$(guest_retry_or_abort "$DEMO_VMID" "wc -l < '${GUEST_STATE}/dst-sha256.txt'" \
   "無法清點目標檔案數" | tr -d '\r\n')
 # 先取值再 say：abort 在 say 的 command substitution 裡只殺得掉 subshell。
-SRC_FILES=$(guest_exec_or_abort "$DEMO_VMID" "wc -l < '${GUEST_STATE}/src-sha256.txt'" \
+SRC_FILES=$(guest_retry_or_abort "$DEMO_VMID" "wc -l < '${GUEST_STATE}/src-sha256.txt'" \
   "無法清點來源檔案數" | tr -d '\r\n')
 say "檔案數：來源 ${SRC_FILES}，目標 ${DST_FILES}"
 

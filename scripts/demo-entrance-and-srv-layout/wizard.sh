@@ -347,18 +347,45 @@ guest_exec() {
   return "$rc"
 }
 
+# _guest_rc_reason RC — 把 guest_exec 的回傳碼講成人話。
+_guest_rc_reason() {
+  case "$1" in
+    124) printf '等超過 %s 秒仍未結束，指令還在 guest 內跑' "$GUEST_EXEC_TIMEOUT" ;;
+    125) printf 'qm guest exec 沒能送出，看上面那行 qm:' ;;
+    126) printf 'qm guest exec 的回應解不開' ;;
+    *)   printf 'guest 內的指令以 %s 結束' "$1" ;;
+  esac
+}
+
 # guest_exec_or_abort VMID 'cmd' '失敗說明' — guest 指令失敗即停止整個序列。
 guest_exec_or_abort() {
   local out rc=0
   out=$(guest_exec "$1" "$2") || rc=$?
-  if [[ "$rc" -ne 0 ]]; then
-    case "$rc" in
-      124) abort "$3（等超過 ${GUEST_EXEC_TIMEOUT} 秒仍未結束；指令還在 guest 內跑）" ;;
-      125) abort "$3（qm guest exec 沒能送出，看上面那行 qm:）" ;;
-      126) abort "$3（qm guest exec 的回應解不開）" ;;
-      *)   abort "$3（guest 內的指令以 ${rc} 結束）" ;;
-    esac
+  [[ "$rc" -eq 0 ]] || abort "$3（$(_guest_rc_reason "$rc")）"
+  printf '%s' "$out"
+}
+
+# guest_retry_or_abort VMID 'cmd' '失敗說明' — 同上，但 agent 叫不動時等它回來
+# 再試一次。
+#
+# 走完七萬個檔案算 SHA-256 這種重活之後，agent 會有一段時間回不了話（qm 說
+# 'qga command failed - got timeout'，下一句就變 'guest agent is not running'）。
+# 那是 agent 的狀態，不是資料的狀態；用「整段停止」收場，等於因為 agent 打了
+# 個嗝就叫人重跑最貴的一段。
+#
+# 只給重跑無害的指令用。125 分不出「沒送出去」與「送出去了但沒收到回覆」，
+# 對會改變 guest 狀態的指令重試就等於重做。
+guest_retry_or_abort() {
+  local out rc=0
+  out=$(guest_exec "$1" "$2") || rc=$?
+  if [[ "$rc" -eq 124 || "$rc" -eq 125 ]]; then
+    # 訊息一律走 stderr：這個函式常在 x=$(…) 底下被呼叫，印到 stdout 會被變數吃掉。
+    warn "guest agent 沒有回應（$(_guest_rc_reason "$rc")）；等它回來後重試一次" >&2
+    wait_agent "$1" 300 >&2 || abort "$3（guest agent 在 5 分鐘內沒有回應）"
+    rc=0
+    out=$(guest_exec "$1" "$2") || rc=$?
   fi
+  [[ "$rc" -eq 0 ]] || abort "$3（$(_guest_rc_reason "$rc")）"
   printf '%s' "$out"
 }
 
@@ -393,7 +420,7 @@ pull_guest_file() {
 # 印出差異行數。比對留在 guest：manifest 與 checksum 動輒數 MB，帶回主機只為了
 # 跑 diff 是把大量資料塞進一條窄通道，而需要的答案只有「相不相符」。
 guest_diff() {
-  guest_exec_or_abort "$1" "diff -u '$2' '$3' > '$4' 2>&1; wc -l < '$4'" \
+  guest_retry_or_abort "$1" "diff -u '$2' '$3' > '$4' 2>&1; wc -l < '$4'" \
     "無法在 guest 內比對 $2 與 $3" | tr -d '\r\n'
 }
 

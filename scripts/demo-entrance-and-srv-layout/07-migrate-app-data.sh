@@ -108,13 +108,15 @@ mkdir -p "$HOST_STATE"
 # 不是報錯，是 PVE 提早回傳、清單只寫到一半，而比對還會說「相符」。
 GUEST_EXEC_TIMEOUT=3600
 
-guest_exec_or_abort "$DEMO_VMID" "$(manifest "$SRC_DIR") > '${GUEST_STATE}/src-manifest.txt'" \
+# 走完七萬個檔案之後 agent 會有一段時間叫不動，所以這幾步用會等它回來的版本。
+# 重跑只是把同一份清單再寫一次，無害。
+guest_retry_or_abort "$DEMO_VMID" "$(manifest "$SRC_DIR") > '${GUEST_STATE}/src-manifest.txt'" \
   "無法產生來源 manifest" >/dev/null
-guest_exec_or_abort "$DEMO_VMID" "$(manifest "$DST_DIR") > '${GUEST_STATE}/dst-manifest.txt'" \
+guest_retry_or_abort "$DEMO_VMID" "$(manifest "$DST_DIR") > '${GUEST_STATE}/dst-manifest.txt'" \
   "無法產生目標 manifest" >/dev/null
-guest_exec_or_abort "$DEMO_VMID" "$(checksums "$SRC_DIR") > '${GUEST_STATE}/src-sha256.txt'" \
+guest_retry_or_abort "$DEMO_VMID" "$(checksums "$SRC_DIR") > '${GUEST_STATE}/src-sha256.txt'" \
   "無法計算來源 SHA-256" >/dev/null
-guest_exec_or_abort "$DEMO_VMID" "$(checksums "$DST_DIR") > '${GUEST_STATE}/dst-sha256.txt'" \
+guest_retry_or_abort "$DEMO_VMID" "$(checksums "$DST_DIR") > '${GUEST_STATE}/dst-sha256.txt'" \
   "無法計算目標 SHA-256" >/dev/null
 
 note "比對在 guest 內做。manifest 與 checksum 有數萬行、數 MB，把它們搬回主機"

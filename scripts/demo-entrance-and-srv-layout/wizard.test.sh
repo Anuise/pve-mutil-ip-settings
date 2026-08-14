@@ -107,6 +107,29 @@ check "回應是陣列不是物件" "126|" "$(ge 'printf "[1,2,3]"')"
 check_contains "逾時時 abort 講的是逾時" "還在 guest 內跑" \
   "$(run_err 'qm() { printf "{\"exited\":0}"; }; guest_exec_or_abort 103 cmd "讀不到"')"
 
+# agent 叫不動時 guest_retry_or_abort 要等它回來再試一次 —— 重跑最貴的一段不該
+# 由 agent 打個嗝來決定。重試的訊息必須走 stderr，否則會被 x=$(…) 吃進值裡，
+# 所以這裡只收 stdout：期望值就是 out-data 本身，不含任何提示文字。
+# 參數是「前幾次要失敗」；qm agent ping 一律成功，wait_agent 才不會真的睡下去。
+retry() {
+  local out rc=0
+  out=$(bash -c "
+    source '$LIB'
+    N=\$(mktemp); printf 0 > \"\$N\"
+    qm() {
+      [[ \$1 == agent ]] && return 0
+      local n; n=\$(cat \"\$N\"); printf '%s' \$((n + 1)) > \"\$N\"
+      (( n < $1 )) && { echo 'guest agent is not running' >&2; return 255; }
+      printf '{\"exitcode\":0,\"out-data\":\"%s\"}' \"\$n\"
+    }
+    guest_retry_or_abort 103 cmd '讀不到'" 2>/dev/null) || rc=$?
+  printf '%s|%s' "$rc" "$out"
+}
+
+check "agent 一時叫不動：等回來再試就過" "0|1" "$(retry 1)"
+check "重試的提示不會混進取回的值" "0|1" "$(retry 1)"
+check "agent 一直叫不動：停止" "1|" "$(retry 9)"
+
 echo
 echo "確認閘門"
 
