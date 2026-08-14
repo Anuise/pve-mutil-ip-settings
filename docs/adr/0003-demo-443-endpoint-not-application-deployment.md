@@ -1,8 +1,13 @@
 ---
-status: accepted
+status: superseded by ADR-0004
 ---
 
 # Demo 的 `443` 由 repo 追蹤的 nginx 端點提供，應用本體部署不在本 spec
+
+> 已由 [ADR-0004](0004-rebuild-demo-from-template-109.md) 取代。本 ADR 的整套推理建立在
+> 「舊 VM 上那三顆手動起的容器要不要沿用」這個問題上；VM 103 改為從範本重建後，那三顆
+> 容器不再存在，問題本身消失。「部署應用本體不屬於本 spec」這一句仍然成立，由 ADR-0004
+> 承接。本 ADR 保留為歷史。
 
 票 04 的盤點顯示 Demo 不只「搬移前沒有 listener」，而是**應用本體從未部署**：images 裡沒有 frontend／backend，只有手動起的 `typeai-demo-proxy`（nginx:1.27-alpine）、`typeai-demo-kc`（keycloak:26.0）、`typeai-demo-pg`（postgres:18-alpine）三顆，全部 `Exited`，且 repo 沒有它們的定義、也沒有重啟策略。因此本專案決定：`443` 由 Demo stack 的 nginx 提供，其定義改寫成 **repo 追蹤的 compose**，TLS 自簽憑證放具名 volume 並提供 `/healthz`，比照 UAT，使 runbook 一套涵蓋兩個環境；而**部署 Type AI Platform Demo 應用本體（build images、secrets、資料庫 migration、Keycloak realm）不屬於本 spec**。
 

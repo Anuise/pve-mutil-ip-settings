@@ -1,8 +1,13 @@
 ---
-status: accepted
+status: superseded by ADR-0004
 ---
 
 # `/srv/platform` 由原 Docker LV 改掛提供
+
+> 已由 [ADR-0004](0004-rebuild-demo-from-template-109.md) 取代。此決策確實執行了
+> （票 06 完成），但事後發現 Demo 的 Docker 使用 containerd image store，image layer
+> 位於 `/var/lib/containerd` 而非 data-root 底下 —— 改掛 data-root 沒有把 image 移出
+> OS 磁碟。VM 103 現改為從範本重建，本 ADR 保留為歷史。
 
 Demo（VM 103）的 `/var/lib/docker` 本身就是 `vg_data` 上的 80G 專屬 LV（`lv_docker`，curtin 安裝時寫入 `/etc/fstab`），而 `/srv` 只有 20G（`lv_srv`）。要讓 Docker data-root、專案 checkout 與應用持久資料一起落在 `/srv/platform` 之下，本專案決定**把 `lv_docker` 的掛載點從 `/var/lib/docker` 改為 `/srv/platform`**，並把原有 Docker 內容 rename 進 `/srv/platform/docker`，data-root 指向該處。`lv_srv` 保留掛在 `/srv`，`/srv/platform` 掛在其下。這與 UAT 的作法相同（見 tutorial 第 7 節）。
 
