@@ -20,7 +20,7 @@ DNAT 的目的地在票 11 已經有人在聽。「回應 Demo」指的是那個
 
 **Blocked by:** 11
 
-**Status:** ready-for-agent
+**Status:** wontfix —— Demo 上沒有 443 服務，8082 不開通；ADR-0001 的配置保留但未安裝
 
 - [ ] `10.1.2.57:8082` 回應 Demo 的 nginx 端點，且可與 UAT 的回應區分
 - [ ] `10.1.2.57:8081` 仍回應 UAT，行為不變

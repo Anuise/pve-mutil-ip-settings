@@ -12,7 +12,7 @@ repo 端：既有 spec 中把 `10.1.2.57:8082` 描述為臨時驗收 port 的段
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done —— 已執行完成，成果隨 VM 103 銷毀（見 `.scratch/demo-rebuild-from-template/spec.md`）
 
 - [x] PVE 上 VM 105 顯示名稱為 `type-ai-platform-uat`
 - [x] VM 105 的電源狀態、網路設定與磁碟在改名前後一致

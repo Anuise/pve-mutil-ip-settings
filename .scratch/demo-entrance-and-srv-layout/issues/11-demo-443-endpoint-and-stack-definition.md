@@ -18,7 +18,7 @@
 
 **Blocked by:** 07
 
-**Status:** ready-for-agent
+**Status:** wontfix —— 應用本體的部署不在新 spec 範圍；443 端點與 stack 定義日後另議
 
 - [ ] 開工前的唯讀補查已執行，三個分支各按 spec 的預先決定處置
 - [ ] `172.23.57.12:443` 由 nginx 提供、TLS 終結，回應可與 UAT 區分

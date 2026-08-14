@@ -15,7 +15,7 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** done —— 已執行完成，成果隨 VM 103 銷毀（見 `.scratch/demo-rebuild-from-template/spec.md`）
 
 - [x] 報告存在於 repo，且所有數字可由報告中記錄的指令重新覆算
 - [x] `/home/mobagel` 的大小與結構已記錄，並區分出專案 checkout 與應用持久資料

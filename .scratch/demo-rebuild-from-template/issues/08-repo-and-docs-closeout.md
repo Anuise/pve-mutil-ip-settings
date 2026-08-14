@@ -24,12 +24,16 @@
 
 **Blocked by:** 07
 
-**Status:** ready-for-agent
+**Status:** done —— repo 與文件收尾已完成；票 01–07 的腳本已交付，由使用者在 PVE host 上執行
 
-- [ ] 舊 spec 與舊 README 都有 superseded 註記，指向新的 spec
-- [ ] 舊票 08–11 標為 `wont-do` 並寫明原因
-- [ ] runbook 的配置表與現況一致（8082 未開通、Demo 無 443 服務）
-- [ ] runbook 的受保護備份清單已更新為新機器的實際內容
-- [ ] repo 內的 nftables ruleset 與 Edge 上實際跑的規則一致，或明確標記為未安裝
-- [ ] 保全產物與 `vzdump` 的位置、保留條件已寫進 runbook，且都還沒被刪
-- [ ] 全 repo 搜尋 `/srv/platform` 與 `lv_docker`，殘留的引用都已修正或標為歷史
+- [x] 舊 spec 與舊 README 都有 superseded 註記，指向新的 spec
+- [x] 舊票 08–11 標為 `wont-do` 並寫明原因
+- [x] runbook 的配置表與現況一致（8082 未開通、Demo 無 443 服務）
+- [x] runbook 的受保護備份清單已更新為新機器的實際內容
+- [x] repo 內的 nftables ruleset 與 Edge 上實際跑的規則一致，或明確標記為未安裝
+- [x] 保全產物與 `vzdump` 的位置、保留條件已寫進 runbook，且都還沒被刪
+- [x] 全 repo 搜尋 `/srv/platform` 與 `lv_docker`，殘留的引用都已修正或標為歷史
+
+執行時的注意：本票勾選的是 repo 端的變更。票 01–07 的腳本已交付但尚未在 PVE
+host 上執行，因此保全產物與 vzdump 封存目前還不存在 —— 「都還沒被刪」在執行前
+是自明的，執行後才是真正的保留承諾。

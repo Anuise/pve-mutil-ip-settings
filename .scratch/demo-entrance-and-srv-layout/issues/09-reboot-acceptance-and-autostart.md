@@ -12,7 +12,7 @@
 
 **Blocked by:** 08
 
-**Status:** ready-for-agent
+**Status:** wontfix —— 驗收對象已銷毀；新機器的重開機驗收改由 `.scratch/demo-rebuild-from-template/` 票 07 執行
 
 - [ ] Demo 與 Edge 重新開機後，`8082` 與 `8081` 皆無需人工介入即恢復
 - [ ] 重開機後 Edge 的防火牆政策自動恢復

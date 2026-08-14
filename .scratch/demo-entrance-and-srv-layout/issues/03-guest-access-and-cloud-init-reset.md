@@ -14,7 +14,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done —— 已執行完成，成果隨 VM 103 銷毀（見 `.scratch/demo-rebuild-from-template/spec.md`）
 
 - [x] Cloud-Init 重置前，authorized SSH keys、掛載表與網路設定目錄已備份
 - [x] 存在於 guest 但不在 hypervisor sshkeys 欄位的金鑰已明確列出

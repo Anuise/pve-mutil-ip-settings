@@ -15,3 +15,12 @@ spec 原本把 `10.1.2.57:8082` 定義為第二服務的*臨時*驗收 port，�
 
 - 專案不再保留任何「已驗證但未使用」的探測 port。日後新增入口 port 必須重跑 empirical gate，且要接受可能因 FortiGate policy 而失敗、無人可協助調整的風險。
 - `8081`／`8082` 的 empirical validation 是時間點限定的。FortiGate 任何變更後兩個 port 都需重測，這項限制不因本決策而改變。
+
+## 現況（2026-08-14）
+
+本決策維持 `accepted`：`8082` 仍配置給 Demo，語意仍是常駐入口。但**尚未開通** ——
+自 2026-08-13 起 Demo 上就沒有任何服務在 `443`，而依
+[ADR-0004](0004-rebuild-demo-from-template-109.md) 從範本 109 重建後也不會有，
+Edge 的三條 `8082` 規則因此保持未安裝狀態
+（`.scratch/single-ip-multi-site-network/nftables.edge.conf` 內已標記為
+「已產生、尚未安裝」）。要開通時規則已經備妥，配置不必重新分配。

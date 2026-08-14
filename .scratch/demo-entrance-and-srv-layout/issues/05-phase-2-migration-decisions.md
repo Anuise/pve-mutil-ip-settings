@@ -18,7 +18,7 @@ spec 明文禁止在量測存在前決定這些。沒有這道閘，票 06 的�
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** superseded —— Phase 2 的決策已由 ADR-0004 推翻，Demo 改為從範本 109 重建
 
 - [x] 搬移目標 volume 已選定，且理由連結到票 04 的實際數字
 - [x] 服務停機順序與各步驟 rollback 已寫明

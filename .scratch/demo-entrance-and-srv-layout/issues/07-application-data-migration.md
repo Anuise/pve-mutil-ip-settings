@@ -20,7 +20,7 @@
 
 **Blocked by:** 06
 
-**Status:** ready-for-agent
+**Status:** done —— 已執行完成，成果隨 VM 103 銷毀（見 `.scratch/demo-rebuild-from-template/spec.md`）
 
 - [ ] `type-ai-platform-demo` checkout 存在於 `/srv/platform/type-ai-platform-demo`，`/srv/platform/app-data` 已建立
 - [ ] 每一個搬移檔案的來源與目標 SHA-256 相符，且比對結果有記錄

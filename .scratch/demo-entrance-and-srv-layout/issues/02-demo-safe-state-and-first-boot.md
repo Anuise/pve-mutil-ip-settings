@@ -26,7 +26,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done —— 已執行完成，成果隨 VM 103 銷毀（見 `.scratch/demo-rebuild-from-template/spec.md`）
 
 - [x] 執行前已確認 Demo 無既有快照，且新快照建立於停機狀態、不含記憶體映像
 - [x] Demo 的網卡掛在 private bridge 上

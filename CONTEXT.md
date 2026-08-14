@@ -35,11 +35,11 @@ _Avoid_: dev, sandbox
 ### 儲存
 
 **Platform storage root**：
-private guest 上收攏 Docker data-root、專案 checkout 與應用持久資料的單一掛載點 `/srv/platform`。由該 guest 上最大的那顆專屬 logical volume 提供，掛在 20G 的 `/srv` 之下。
+UAT（VM 105）上收攏 Docker data-root、專案 checkout 與應用持久資料的單一掛載點 `/srv/platform`。由該 guest 上最大的那顆專屬 logical volume 提供，掛在 20G 的 `/srv` 之下。**只適用於 UAT** —— Demo 依 ADR-0004 從範本 109 重建後不再有這一層，checkout 直接放在 `/srv` 底下（ADR-0002 隨舊機器一併作廢）。
 _Avoid_: /srv, 大資料卷, data volume
 
 **Model cache volume**：
-Demo 上獨立的 500G xfs 卷 `/data/model-cache`，只放模型檔。不是 platform storage root 的替代品。
+`/data/model-cache`，只放模型檔，不是 platform storage root 的替代品。舊 Demo 上那顆 500G xfs 卷從未被使用，重建時不帶過來；這個詞在重建後沒有對應的實體。
 _Avoid_: 大資料卷, data disk
 
 > 「backend」一詞曾同時指涉三件事：Edge 後面任何一台私有 guest、VM 105 的機器名稱、以及 UAT 這個環境。改用上列詞彙後不再使用它。

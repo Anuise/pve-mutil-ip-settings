@@ -4,17 +4,17 @@
 
 | Role | PVE VM | Address | Published mapping |
 | --- | --- | --- | --- |
-| Edge | 104 `single-ip-edge` | `10.1.2.57/24`, `172.23.57.1/24` | TCP `8081`, `8082` |
+| Edge | 104 `single-ip-edge` | `10.1.2.57/24`, `172.23.57.1/24` | TCP `8081` |
 | Type AI UAT | 105 `type-ai-platform-uat` | `172.23.57.11/24` | `8081 -> 172.23.57.11:443 -> nginx:443` |
-| Type AI Demo | 103 `type-ai-platform-demo` | `172.23.57.12/24` | `8082 -> 172.23.57.12:443 -> nginx:443` |
+| Type AI Demo | 103 `type-ai-platform-demo` | `172.23.57.12/24` | none — `8082` allocated, not published |
 
-The client URLs are `https://10.1.2.57:8081` for UAT and `https://10.1.2.57:8082` for Demo. Each uses its own nginx self-signed certificate; the browser will show a certificate warning once per environment. DNS, ACME, publicly trusted TLS, WireGuard and hostname routing are not part of this deployment.
+The only published client URL is `https://10.1.2.57:8081` for UAT. It uses its own nginx self-signed certificate; the browser will show a certificate warning once. DNS, ACME, publicly trusted TLS, WireGuard and hostname routing are not part of this deployment.
 
-`8082` is a permanent entrance port, not a spare validation port; see ADR-0001. Reaching `8082` proves the Demo entrance is reachable and TLS-terminated and that its response is distinguishable from UAT's. It does not mean the Demo application is deployed — it is not; see ADR-0003.
+Demo (VM 103) is being rebuilt from template 109 `ub-26-4-srv-docker`; see ADR-0004. The procedure is `scripts/demo-rebuild-from-template/`, run by hand on the PVE host. Nothing has listened on Demo's `443` since 2026-08-13 and the rebuilt machine will not serve it either, so the three Edge `8082` rules exist in the tracked ruleset but are **not installed** and `https://10.1.2.57:8082` does not answer. `8082` remains allocated to Demo as a permanent entrance port (ADR-0001) and can be published later without reallocating anything. Demo's purpose becomes development inside `/srv`: the `type-ai-platform-demo` monorepo is checked out at `/srv/type-ai-platform-demo`, owned by `mobagel`. Application deployment remains out of scope; see ADR-0003.
 
 UAT is built from application revision `25201dbf1ba3475ebe9a69356c551e6394937f26`. Its `ENV=dev` fake SSO is for trusted-network testing only; do not place real personal data in this environment.
 
-The applied Edge ruleset is tracked at `.scratch/single-ip-multi-site-network/nftables.edge.conf`. Unallocated ports have no DNAT rule and fail closed.
+The applied Edge ruleset is tracked at `.scratch/single-ip-multi-site-network/nftables.edge.conf`. Unallocated ports have no DNAT rule and fail closed. The `8082` forward, DNAT and SNAT rules are present in that file but commented out and marked as generated-not-installed, so the file matches what actually runs on the Edge.
 
 ## Health and status
 
@@ -23,16 +23,18 @@ From an approved FortiClient session:
 ```powershell
 Test-NetConnection 10.1.2.57 -Port 8081
 curl.exe -kfsS https://10.1.2.57:8081/healthz
-Test-NetConnection 10.1.2.57 -Port 8082
-curl.exe -kfsS https://10.1.2.57:8082/healthz
 ```
 
-Expected health bodies, which must stay distinguishable:
+Expected UAT health body:
 
 ```json
 {"status":"ok"}
-{"status":"ok","env":"demo"}
 ```
+
+`8082` has no DNAT rule installed, so `Test-NetConnection 10.1.2.57 -Port 8082` must
+fail closed exactly like an unallocated port. That is the current expected result, not
+a fault. It is also the check to repeat after any Demo work, to prove nothing published
+the port by accident.
 
 Edge checks:
 
@@ -41,8 +43,9 @@ sudo systemctl status nftables single-ip-edge-health.timer
 cat /proc/sys/net/ipv4/ip_forward
 sudo nft list ruleset
 curl -kfsS https://172.23.57.11:443/healthz
-curl -kfsS https://172.23.57.12:443/healthz
 ```
+
+There is no equivalent Demo check: nothing listens on `172.23.57.12:443`.
 
 UAT private guest checks, reached through the Edge SSH jump host:
 
@@ -63,6 +66,10 @@ curl -kfsS https://172.23.57.11:443/healthz
 df -hT /srv/platform
 ```
 
+`/srv/platform` above is UAT-only — it is that guest's remounted Docker logical
+volume. Demo has no `/srv/platform`: ADR-0002 applied to the machine destroyed in
+the 2026-08-14 rebuild, and the replacement keeps everything directly under `/srv`.
+
 The `ESTABLISHED,RELATED` rule must be evaluated before the service-port rules.
 Docker return traffic traverses `DOCKER-USER`; without this rule, outbound
 HTTPS from UAT containers can be dropped because its original destination port
@@ -79,24 +86,34 @@ journalctl -k -g type-ai-drop
 
 These checks must not print `.env`, tokens or authorization headers.
 
-Demo private guest checks, reached through the Edge SSH jump host:
+Demo private guest checks once the rebuild has run, reached through the Edge SSH
+jump host:
 
 ```bash
+ip -4 -o addr show scope global
 systemctl status docker
-docker inspect --format='{{.Name}} {{.State.Status}} {{.HostConfig.RestartPolicy.Name}}' \
-  typeai-demo-proxy typeai-demo-kc typeai-demo-pg
-curl -kfsS https://172.23.57.12:443/healthz
-findmnt /srv/platform
-docker info --format '{{.DockerRootDir}}'
-df -hT /srv/platform
+findmnt /srv
+docker info --format '{{.DockerRootDir}} {{.Driver}} {{.ServerVersion}}'
+df -hT /srv
+sudo -u mobagel git -C /srv/type-ai-platform-demo status
+ls -l /srv/typeai-demo
 ```
 
-All three containers must report `running` and `unless-stopped`. `typeai-demo-pg`
-must never be recreated: its single anonymous volume holds the database, and a
-recreated container is given a new empty one. Demo has no `DOCKER-USER` ruleset
-of its own; unlike UAT it is not reachable from anything but the Edge, and the
-spec does not require one. The stack definition is tracked at
-`scripts/demo-entrance-and-srv-layout/demo-stack/`.
+The address must be `172.23.57.12/24` with no `10.1.2.x` address anywhere; `/srv`
+must be its own filesystem with at least 20% free. `/srv/type-ai-platform-demo` is
+the `main` checkout, owned by `mobagel` — never clone or pull it as root, or every
+later `git` command has to deal with `dubious ownership`. `/srv/typeai-demo` holds
+the five secrets carried over from the previous machine (mode `0600`, owner
+`mobagel`), `nginx.conf`, `試用說明.md` and, if that optional step was taken,
+`typeai-demo-pg-volume.tar`. That tar is the previous Keycloak database, kept as a
+plain file on purpose: no Docker volume is created for it, because nothing is
+running that would use it. The rebuilt Demo runs no containers and needs no
+`DOCKER-USER` ruleset. The old three-container stack definition at
+`scripts/demo-entrance-and-srv-layout/demo-stack/` describes the machine being
+replaced and is history, not current state.
+
+The expired `tls.crt` / `tls.key` from the previous machine are deliberately not
+restored; a `443` endpoint, if it is ever wanted, gets a fresh certificate then.
 
 ### UAT certificate lifecycle
 
@@ -224,12 +241,32 @@ Backups must include:
 - the deployed immutable Git revision;
 - `/srv/platform` Docker volumes and persistent application data.
 
-The ignored `.secrets` hierarchy, the remote `.env.uat`, the UAT and Demo nginx
-certificate volumes, their root-owned fingerprint files and Demo's
-`/srv/platform/type-ai-platform-demo/deploy/keycloak.env` require a separately
-approved encrypted/protected backup. They must not be copied into Git, tickets,
-ordinary logs or an unencrypted VM backup export. This design has no DNS API
-token or ACME account key.
+The ignored `.secrets` hierarchy, the remote `.env.uat`, the UAT nginx certificate
+volume and its root-owned fingerprint file, Demo's `/srv/typeai-demo/` secrets
+(`demo-password`, `kc-admin-password`, `kc-token`, `seed-client-secret`,
+`service-token-secret`) and Demo's GitLab deploy key
+`/home/mobagel/.ssh/id_ed25519_mobagel_gitlab` require a separately approved
+encrypted/protected backup. They must not be copied into Git, tickets, ordinary
+logs or an unencrypted VM backup export. The Demo nginx certificate volume is no
+longer in this list: the rebuilt machine has no `443` service and the previous
+certificate was not carried over. This design has no DNS API token or ACME
+account key.
+
+### Rebuild artifacts, retained until explicitly released
+
+Running the rebuild procedure leaves two things on the PVE host, and **neither is
+deleted until the user says so**:
+
+- `/root/demo-preserve-<YYYYMMDD-HHMMSS>/`, mode `0700` — the deploy key, the five
+  Demo secrets, `nginx.conf`, `試用說明.md`, the Keycloak database volume tar, and
+  `preserve-report.md` (names, sizes and SHA-256 only; values `<redacted>`).
+- the `vzdump` archive of the replaced VM 103 on storage `local`; its path, size and
+  SHA-256 are recorded in that same report.
+
+**Nothing in the preserve directory may enter Git — not one file, no exceptions.**
+The readback of the new machine is written outside it, to
+`/root/demo-rebuild-shape-<YYYYMMDD-HHMMSS>.md`, with every section passed through
+the redaction filter; that file may be copied to `docs/reports/` after a look.
 
 An actual restore drill must target an isolated VMID/network and must not overwrite VM 104 or VM 105. After restore, verify resources, private addresses, `/srv` placement and headroom, then repeat every black-box check before cutover.
 

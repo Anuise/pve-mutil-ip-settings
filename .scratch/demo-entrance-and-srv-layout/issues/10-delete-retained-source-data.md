@@ -10,7 +10,7 @@
 
 **Blocked by:** 09
 
-**Status:** ready-for-agent
+**Status:** wontfix —— 要刪的來源資料隨 VM 103 一起消失，已無對象
 
 - [ ] 刪除前已確認 SHA-256 比對紀錄全數相符
 - [ ] 刪除前已確認票 09 全數通過

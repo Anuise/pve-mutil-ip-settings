@@ -1,6 +1,20 @@
 # Demo 上線 entrance port 8082 與 `/srv` 儲存重整
 
-Status: ready-for-agent
+Status: superseded — 由 [`.scratch/demo-rebuild-from-template/spec.md`](../demo-rebuild-from-template/spec.md) 取代
+
+> **本 spec 不再執行。** 2026-08-14 決定把 VM 103 改由範本 109
+> （`ub-26-4-srv-docker`）重建，理由見
+> [ADR-0004](../../docs/adr/0004-rebuild-demo-from-template-109.md)。重建程序在
+> [`scripts/demo-rebuild-from-template/`](../../scripts/demo-rebuild-from-template/)，
+> 由人在 PVE host 上執行；執行後這台機器就不存在了。
+>
+> - 票 01–04、06、07：`done`。確實執行完成，但成果會隨 VM 103 一起銷毀。
+> - 票 05：`superseded`。Phase 2 的機制決策被 ADR-0004 推翻。
+> - 票 08–11：`wont-do`。8082 未開通、Demo 上沒有 443 服務、要刪的來源已不存在。
+>
+> 底下的內容保留為歷史紀錄，不再更新。其中 `/srv/platform` 與 `lv_docker`
+> 只適用於已銷毀的那台機器；新機器沒有這一層（repo clone 在 `/srv` 之下）。
+> UAT（VM 105）的 `/srv/platform` 是另一回事，仍然有效。
 
 ## Problem Statement
 

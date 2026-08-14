@@ -10,7 +10,7 @@ Demo 的 Docker 不是空的（3 containers、7 images、1 volume，共 65M）�
 
 **Blocked by:** 05
 
-**Status:** ready-for-agent
+**Status:** done —— 已執行完成，成果隨 VM 103 銷毀（見 `.scratch/demo-rebuild-from-template/spec.md`）
 
 - [ ] `/srv/platform` 由原本掛在 `/var/lib/docker` 的 80G LV 提供，掛載選項仍為 `defaults`
 - [ ] Docker 的 data-root 解析為 `/srv/platform/docker`

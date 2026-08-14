@@ -2,6 +2,15 @@
 
 規格：[`.scratch/demo-entrance-and-srv-layout/spec.md`](../../.scratch/demo-entrance-and-srv-layout/spec.md)
 
+> **superseded** —— 這批腳本操作的 VM 103 已決定銷毀並由範本 109 重建
+> （2026-08-14，[ADR-0004](../../docs/adr/0004-rebuild-demo-from-template-109.md)）。
+> 現行程序在 [`scripts/demo-rebuild-from-template/`](../demo-rebuild-from-template/)。
+>
+> 腳本本身保留：`wizard.sh` 仍是共用 library（新目錄直接 source 它），
+> `08-publish-entrance-port-8082.sh` 的 nftables 規則產生器日後開通 8082 時還要用。
+> 但票 01–04、06、07 的成果會隨機器一起消失，票 08–11 不再執行 —— 不要拿這批
+> 腳本對重建後的機器重跑。
+
 這些是**你自己執行**的互動腳本。agent 不代為執行任何 hypervisor 變更。
 每一步執行後都會讀回結果；讀回不符時整個序列停止，不會繼續。
 
