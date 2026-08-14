@@ -1,0 +1,4 @@
+# 這些檔案要在 PVE host（Linux）上跑或載入。core.autocrlf=true 的 Windows
+# checkout 會把它們換成 CRLF，而 bash 在 shebang 那一行就會失敗，nft 也讀不了。
+*.sh   text eol=lf
+*.conf text eol=lf
