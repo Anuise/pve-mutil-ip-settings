@@ -130,6 +130,31 @@ check "agent 一時叫不動：等回來再試就過" "0|1" "$(retry 1)"
 check "重試的提示不會混進取回的值" "0|1" "$(retry 1)"
 check "agent 一直叫不動：停止" "1|" "$(retry 9)"
 
+# 「agent is not running」是 PVE 在送出之前擋下來的，指令確定沒跑到 guest 裡，
+# 所以連不宣告可重跑的 guest_exec_or_abort 也該等它回來重試 —— 票 07 stage 8
+# 就是死在這裡。至於 guest-exec 逾時，送出去了沒有分不出來，不宣告就不重試。
+undispatched() { # undispatched FN QM_STDERR — 印出 "<exit>|<stdout>"
+  local out rc=0
+  out=$(bash -c "
+    source '$LIB'
+    N=\$(mktemp); printf 0 > \"\$N\"
+    qm() {
+      [[ \$1 == agent ]] && return 0
+      local n; n=\$(cat \"\$N\"); printf '%s' \$((n + 1)) > \"\$N\"
+      (( n < 1 )) && { echo '$2' >&2; return 255; }
+      printf '{\"exitcode\":0,\"out-data\":\"ok\"}'
+    }
+    $1 103 cmd '讀不到'" 2>/dev/null) || rc=$?
+  printf '%s|%s' "$rc" "$out"
+}
+
+check "agent 未執行：連不宣告可重跑的也重試" "0|ok" \
+  "$(undispatched guest_exec_or_abort 'QEMU guest agent is not running')"
+check "guest-exec 逾時：不宣告可重跑就不重試" "1|" \
+  "$(undispatched guest_exec_or_abort "qga command 'guest-exec' failed - got timeout")"
+check "guest-exec 逾時：宣告可重跑才重試" "0|ok" \
+  "$(undispatched guest_retry_or_abort "qga command 'guest-exec' failed - got timeout")"
+
 echo
 echo "確認閘門"
 

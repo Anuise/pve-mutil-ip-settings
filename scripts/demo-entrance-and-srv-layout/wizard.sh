@@ -328,8 +328,12 @@ guest_exec() {
   err=$(mktemp)
   if ! json=$(qm guest exec "$vmid" --timeout "$GUEST_EXEC_TIMEOUT" -- /bin/sh -c "$cmd" 2>"$err"); then
     sed 's/^/      qm: /' "$err" >&2
+    # 「agent is not running」是 PVE 在送出之前就擋下來的，指令確定沒跑到 guest
+    # 裡，所以連會改變狀態的指令重試都安全。其他 qm 失敗（例如 guest-exec 逾時）
+    # 分不出送出去了沒有，要不要重試只能由呼叫端決定。
+    grep -qi 'agent is not running' "$err" && rc=121 || rc=125
     rm -f "$err"
-    return 125
+    return "$rc"
   fi
   # 逾時的警告是印在 stderr 而不是塞進 JSON 的，所以成功的路徑也要看這個檔。
   [[ -s "$err" ]] && sed 's/^/      qm: /' "$err" >&2
@@ -350,6 +354,7 @@ guest_exec() {
 # _guest_rc_reason RC — 把 guest_exec 的回傳碼講成人話。
 _guest_rc_reason() {
   case "$1" in
+    121) printf 'guest agent 沒有在跑，指令沒送出去' ;;
     124) printf '等超過 %s 秒仍未結束，指令還在 guest 內跑' "$GUEST_EXEC_TIMEOUT" ;;
     125) printf 'qm guest exec 沒能送出，看上面那行 qm:' ;;
     126) printf 'qm guest exec 的回應解不開' ;;
@@ -357,37 +362,37 @@ _guest_rc_reason() {
   esac
 }
 
-# guest_exec_or_abort VMID 'cmd' '失敗說明' — guest 指令失敗即停止整個序列。
-guest_exec_or_abort() {
-  local out rc=0
-  out=$(guest_exec "$1" "$2") || rc=$?
-  [[ "$rc" -eq 0 ]] || abort "$3（$(_guest_rc_reason "$rc")）"
-  printf '%s' "$out"
-}
-
-# guest_retry_or_abort VMID 'cmd' '失敗說明' — 同上，但 agent 叫不動時等它回來
-# 再試一次。
+# _guest_exec_retrying VMID 'cmd' '失敗說明' REPEATABLE — 底層實作。
 #
-# 走完七萬個檔案算 SHA-256 這種重活之後，agent 會有一段時間回不了話（qm 說
+# 走完七萬個檔案這種重活之後，agent 會有一段時間回不了話（qm 先說
 # 'qga command failed - got timeout'，下一句就變 'guest agent is not running'）。
 # 那是 agent 的狀態，不是資料的狀態；用「整段停止」收場，等於因為 agent 打了
 # 個嗝就叫人重跑最貴的一段。
 #
-# 只給重跑無害的指令用。125 分不出「沒送出去」與「送出去了但沒收到回覆」，
-# 對會改變 guest 狀態的指令重試就等於重做。
-guest_retry_or_abort() {
-  local out rc=0
-  out=$(guest_exec "$1" "$2") || rc=$?
-  if [[ "$rc" -eq 124 || "$rc" -eq 125 ]]; then
-    # 訊息一律走 stderr：這個函式常在 x=$(…) 底下被呼叫，印到 stdout 會被變數吃掉。
-    warn "guest agent 沒有回應（$(_guest_rc_reason "$rc")）；等它回來後重試一次" >&2
-    wait_agent "$1" 300 >&2 || abort "$3（guest agent 在 5 分鐘內沒有回應）"
+# 121 一律重試：PVE 在送出之前就擋下來了，指令確定沒跑到 guest 裡。
+# 124／125 只在 REPEATABLE=yes 時重試：它們分不出「沒送出去」與「送出去了但
+# 沒收到回覆」，對會改變 guest 狀態的指令重試就等於重做。
+_guest_exec_retrying() {
+  local vmid="$1" cmd="$2" msg="$3" repeatable="$4" out rc=0
+  out=$(guest_exec "$vmid" "$cmd") || rc=$?
+  if [[ "$rc" -eq 121 ]] ||
+     { [[ "$repeatable" == yes ]] && [[ "$rc" -eq 124 || "$rc" -eq 125 ]]; }; then
+    # 訊息一律走 stderr：這些函式常在 x=$(…) 底下被呼叫，印到 stdout 會被變數吃掉。
+    warn "$(_guest_rc_reason "$rc")；等 agent 回來後重試一次" >&2
+    wait_agent "$vmid" 300 >&2 || abort "${msg}（guest agent 在 5 分鐘內沒有回應）"
     rc=0
-    out=$(guest_exec "$1" "$2") || rc=$?
+    out=$(guest_exec "$vmid" "$cmd") || rc=$?
   fi
-  [[ "$rc" -eq 0 ]] || abort "$3（$(_guest_rc_reason "$rc")）"
+  [[ "$rc" -eq 0 ]] || abort "${msg}（$(_guest_rc_reason "$rc")）"
   printf '%s' "$out"
 }
+
+# guest_exec_or_abort VMID 'cmd' '失敗說明' — guest 指令失敗即停止整個序列。
+guest_exec_or_abort() { _guest_exec_retrying "$1" "$2" "$3" no; }
+
+# guest_retry_or_abort VMID 'cmd' '失敗說明' — 同上，但連 agent 逾時也重試。
+# 只給重跑無害的指令用。
+guest_retry_or_abort() { _guest_exec_retrying "$1" "$2" "$3" yes; }
 
 # guest_global_addrs VMID — guest 內部所有 scope global 的 `iface=CIDR`，單行。
 guest_global_addrs() {
