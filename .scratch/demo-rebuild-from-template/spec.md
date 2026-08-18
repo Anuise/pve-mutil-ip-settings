@@ -1,5 +1,11 @@
 # Demo 從範本 109 重建
 
+> **Superseded by [`../cib-ai-platform-rebuild/spec.md`](../cib-ai-platform-rebuild/spec.md)。**
+> 使用者於 2026-08-18 決定不保全、不備份，直接抽換為 `cib-ai-platform`
+> （[ADR-0006](../../docs/adr/0006-replace-103-with-cib-ai-platform-no-backup.md)）。
+> 票 01–07 因此 `wont-do`；票 08（repo 收尾）已執行完成。
+> 腳本不刪：`wizard.sh` 的讀回、閘門與分段傳輸由新 spec 沿用。
+
 VM 103（Demo）改由範本 109（`ub-26-4-srv-docker`）重建，用途從「展示既有部署」轉為
 「在 `/srv` 內開發 `type-ai-platform-demo`」。理由與取捨見
 [ADR-0004](../../docs/adr/0004-rebuild-demo-from-template-109.md)。

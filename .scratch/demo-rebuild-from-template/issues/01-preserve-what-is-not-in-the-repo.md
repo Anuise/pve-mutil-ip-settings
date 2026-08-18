@@ -28,7 +28,7 @@ repo 裡沒有、重建後拿不回來的東西。
 
 **Blocked by:** —
 
-**Status:** ready-for-agent
+**Status:** wont-do —— 使用者改為不保全、不備份直接抽換（ADR-0006）；由 `.scratch/cib-ai-platform-rebuild/` 取代
 
 - [ ] `/root/demo-preserve-<TS>/` 存在，mode `0700`，擁有者 root
 - [ ] deploy key 三個檔案都在，主機端重算的 SHA-256 與 guest 內相符

@@ -24,3 +24,13 @@ spec 原本把 `10.1.2.57:8082` 定義為第二服務的*臨時*驗收 port，�
 Edge 的三條 `8082` 規則因此保持未安裝狀態
 （`.scratch/single-ip-multi-site-network/nftables.edge.conf` 內已標記為
 「已產生、尚未安裝」）。要開通時規則已經備妥，配置不必重新分配。
+
+## 現況（2026-08-18）
+
+本決策維持 `accepted`，但配置對象改了：`8082` 配置給 **CIB**（VM 103
+`cib-ai-platform`），不再是 Demo —— 那台機器即將被未備份銷毀
+（[ADR-0006](0006-replace-103-with-cib-ai-platform-no-backup.md)，程序尚未執行）。
+
+開通的前提也改了：依 [ADR-0007](0007-publish-8082-before-any-service-exists.md)，
+三條規則不再等 `443` 上有常駐服務才安裝。安裝與驗收由
+`.scratch/cib-ai-platform-rebuild/` 的票 04 執行；**該票執行之前，`8082` 仍未開通**。

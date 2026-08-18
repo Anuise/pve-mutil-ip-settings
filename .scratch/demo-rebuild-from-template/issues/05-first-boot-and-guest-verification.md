@@ -25,7 +25,7 @@ Docker 可用性用實際動作證明：pull 一個小 image、跑一個用後�
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** wont-do —— 使用者改為不保全、不備份直接抽換（ADR-0006）；由 `.scratch/cib-ai-platform-rebuild/` 取代
 
 - [ ] VM `running`，guest agent 有回應
 - [ ] guest 內位址為 `172.23.57.12/24`，閘道 `172.23.57.1`，**沒有任何 `10.1.2.x` 位址**

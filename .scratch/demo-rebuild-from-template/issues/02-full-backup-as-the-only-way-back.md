@@ -17,7 +17,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** wont-do —— 使用者改為不保全、不備份直接抽換（ADR-0006）；由 `.scratch/cib-ai-platform-rebuild/` 取代
 
 - [ ] VM 103 已 `stopped`，`qm status` 讀回確認
 - [ ] `vzdump` 完成，結束碼為 0

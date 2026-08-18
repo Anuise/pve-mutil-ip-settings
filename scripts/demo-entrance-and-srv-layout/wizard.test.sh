@@ -156,6 +156,42 @@ check "guest-exec 逾時：宣告可重跑才重試" "0|ok" \
   "$(undispatched guest_retry_or_abort "qga command 'guest-exec' failed - got timeout")"
 
 echo
+echo "通道上只留 ASCII（票 03 stage 5）"
+# 帶中文的 argv 會讓 guest-exec 整個不回話，PVE 只報 got timeout —— agent 還活著，
+# 所以連重試都一樣失敗。那種指令改用 base64 送；純 ASCII 的原樣送出，現場跑得過
+# 的一百多處呼叫端不該因為這個修法而改變送出去的位元組。
+wire() { # wire '指令' — 印出 qm 實際收到的最後一個參數
+  local f out; f=$(mktemp)
+  bash -c "source '$LIB'; qm() { printf '%s' \"\${!#}\" > '$f'; printf '{\"exitcode\":0}'; }
+           guest_exec 103 \"\$1\" >/dev/null" _ "$1" 2>/dev/null
+  out=$(cat "$f"); rm -f "$f"; printf '%s' "$out"
+}
+nonascii() { printf '%s' "$1" | LC_ALL=C tr -d '\0-\177' | wc -c | tr -d ' '; }
+
+ASCII_MULTILINE=$(printf 'set -e\ntar -cf - .')
+CJK_CMD="du -sh /x || echo '(沒有子目錄)'"
+
+check "純 ASCII 的指令原樣送出" "du -sh /var/lib/docker" "$(wire 'du -sh /var/lib/docker')"
+check "多行純 ASCII 也原樣送出" "$ASCII_MULTILINE" "$(wire "$ASCII_MULTILINE")"
+check "帶中文：通道上一個非 ASCII 位元組都不剩" "0" "$(nonascii "$(wire "$CJK_CMD")")"
+# 字串比對只證明語法，證不了語意。把包裝後的指令真的跑一遍，和直接跑原指令比輸出
+# —— 這才擋得住「外層的 $( 在主機就被展開」這類錯法。
+runs_same() { # runs_same '指令' — 原指令與包裝後的指令輸出相同就印 same
+  local direct wrapped
+  direct=$(eval "$1" 2>&1)
+  wrapped=$(bash -c "$(wire "$1")" 2>&1)
+  if [[ "$direct" == "$wrapped" ]]; then printf same
+  else printf 'differ: [%s] vs [%s]' "$direct" "$wrapped"; fi
+}
+
+check "帶中文：包裝後跑起來輸出一樣" "same" "$(runs_same "$CJK_CMD")"
+check "帶中文又跨行：包裝後跑起來輸出一樣" "same" \
+  "$(runs_same "$(printf "echo '甲'\necho '乙'")")"
+check "包裝後的指令結束碼要傳得回來" "3" \
+  "$(run 'qm() { printf "{\"exitcode\":3}"; }; guest_exec 103 "echo 甲"; printf %s $?' |
+     cut -d'|' -f2 | tr -d ' ')"
+
+echo
 echo "確認閘門"
 
 r=$(run 'gate "繼續？"; echo REACHED_NEXT_STEP' 'y

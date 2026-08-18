@@ -23,7 +23,7 @@ UAT（VM 105）與 Edge（VM 104）全程不得受影響。銷毀前後各驗一
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** wont-do —— 使用者改為不保全、不備份直接抽換（ADR-0006）；由 `.scratch/cib-ai-platform-rebuild/` 取代
 
 - [ ] 票 01 的保全產物逐項 SHA-256 相符（不採信上一次的紀錄，現場重算）
 - [ ] 票 02 的封存存在且內容列得出來

@@ -1,6 +1,10 @@
 ---
-status: accepted
+status: superseded
 ---
+
+> **Superseded by [ADR-0006](0006-replace-103-with-cib-ai-platform-no-backup.md)。**
+> 那把金鑰隨 VM 103 未備份銷毀而消失，本決策的前提（沿用既有金鑰、不必請人去 GitLab
+> 簽發）不再成立。要 clone repo 得先簽發新的一把。
 
 # 沿用既有的 GitLab deploy key，不重新簽發
 

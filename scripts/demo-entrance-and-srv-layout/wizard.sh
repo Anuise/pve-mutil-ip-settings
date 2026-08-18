@@ -325,6 +325,14 @@ redact_secrets() {
 #   126 = 回應不是可解析的 JSON。
 guest_exec() {
   local vmid="$1" cmd="$2" json err rc=0
+  # 通道上只留 ASCII。argv 帶多位元組字元時，guest-exec 會整個不回話，PVE 只能報
+  # `qga command 'guest-exec' failed - got timeout` —— agent 還活著（ping 得到），
+  # 但那一句永遠等不到回覆，所以連重試都一樣失敗。票 03 stage 5 的
+  # `|| echo '(沒有 overlayfs 子目錄)'` 就是這樣把整票停掉的，兩台 VM 都一樣。
+  # 已經是純 ASCII 的指令原樣送出：現場跑得過的一百多處呼叫端不必跟著變。
+  if [[ -n "$(printf '%s' "$cmd" | LC_ALL=C tr -d '\0-\177')" ]]; then
+    cmd="eval \"\$(printf %s '$(printf '%s' "$cmd" | base64 -w0)' | base64 -d)\""
+  fi
   err=$(mktemp)
   if ! json=$(qm guest exec "$vmid" --timeout "$GUEST_EXEC_TIMEOUT" -- /bin/sh -c "$cmd" 2>"$err"); then
     sed 's/^/      qm: /' "$err" >&2

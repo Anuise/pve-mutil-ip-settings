@@ -1,5 +1,11 @@
 # Demo 從範本 109 重建 — 執行腳本
 
+> **Superseded：本序列不再執行。**
+> 改跑 [`../cib-ai-platform-rebuild/`](../cib-ai-platform-rebuild/)：不保全、不備份，
+> 新機器改名 `cib-ai-platform`
+> （[ADR-0006](../../docs/adr/0006-replace-103-with-cib-ai-platform-no-backup.md)）。
+> 這裡的 `wizard.sh` 不刪 —— 新序列 `source` 它。
+
 規格：[`.scratch/demo-rebuild-from-template/spec.md`](../../.scratch/demo-rebuild-from-template/spec.md)
 決策：[ADR-0004](../../docs/adr/0004-rebuild-demo-from-template-109.md)、[ADR-0005](../../docs/adr/0005-carry-over-existing-gitlab-deploy-key.md)
 
@@ -28,7 +34,8 @@
 複製整個 `scripts/`，不要只複製這一個目錄：
 
 ```bash
-scp -r scripts root@10.1.2.50:/root/pve-scripts/
+ssh root@10.1.2.50 'mkdir -p /root/pve-scripts'
+scp -r scripts/cib-ai-platform-rebuild scripts/demo-rebuild-from-template scripts/demo-entrance-and-srv-layout root@10.1.2.50:/root/pve-scripts/
 ```
 
 然後在 PVE host 上以 root：

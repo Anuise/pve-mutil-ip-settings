@@ -24,7 +24,7 @@ volume** —— 等真的要跑 Keycloak 時再由那時候的 compose 決定怎
 
 **Blocked by:** 06
 
-**Status:** ready-for-agent
+**Status:** wont-do —— 使用者改為不保全、不備份直接抽換（ADR-0006）；由 `.scratch/cib-ai-platform-rebuild/` 取代
 
 - [ ] 五個 secret 檔已還原，mode `0600`，擁有者 `mobagel`，SHA-256 與票 01 記錄相符
 - [ ] `nginx.conf` 與 `試用說明.md` 已還原

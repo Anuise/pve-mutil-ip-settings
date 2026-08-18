@@ -69,3 +69,11 @@ Phase 2 的就地轉移已完成票 06（`lv_docker` 改掛 `/srv/platform`）�
   維持未執行。ADR-0001 的配置保留給 Demo，不轉派他用。
 - 舊 spec `.scratch/demo-entrance-and-srv-layout/` 與其腳本保留為歷史並標記 superseded；
   票 08 的 nftables 規則產生器日後開通入口時仍可直接用。
+
+## 現況（2026-08-18）
+
+本決策維持 `accepted`：VM 103 仍是從範本 109 重建，這一點沒有變。但**重建的程序**已由
+[ADR-0006](0006-replace-103-with-cib-ai-platform-no-backup.md) 改寫 —— 不保全、不備份，
+新機器改名 `cib-ai-platform`，repo clone 不在範圍。執行程序改為
+`.scratch/cib-ai-platform-rebuild/`，`.scratch/demo-rebuild-from-template/` 的票 01–07
+不再執行。

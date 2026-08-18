@@ -27,7 +27,7 @@ repo 是 monorepo，clone 後應該看得到
 
 **Blocked by:** 05
 
-**Status:** ready-for-agent
+**Status:** wont-do —— 使用者改為不保全、不備份直接抽換（ADR-0006）；由 `.scratch/cib-ai-platform-rebuild/` 取代
 
 - [ ] `~mobagel/.ssh/` 為 `0700`，私鑰 `0600`、公鑰 `0644`，擁有者皆為 `mobagel`
 - [ ] 金鑰 fingerprint 與票 01 記錄的相符

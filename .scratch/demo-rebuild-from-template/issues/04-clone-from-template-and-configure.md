@@ -28,7 +28,7 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** wont-do —— 使用者改為不保全、不備份直接抽換（ADR-0006）；由 `.scratch/cib-ai-platform-rebuild/` 取代
 
 - [ ] `qm clone 109 103 --full` 完成，且新 VM 不依賴範本 109（非 linked clone）
 - [ ] 範本 109 本身未被改動，仍是 `template: 1`
